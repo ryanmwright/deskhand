@@ -43,6 +43,19 @@
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.deskhand;
       });
 
+      # Home Manager module (nix/hm-module.nix). `homeModules` is the newer name.
+      homeManagerModules.default = import ./nix/hm-module.nix self;
+      homeModules.default = self.homeManagerModules.default;
+
+      # Evaluates the module against a stub of the Home Manager options it uses
+      # (so this flake needs no home-manager input) and checks the result.
+      checks = forAllSystems (pkgs: {
+        hm-module = import ./nix/hm-module-check.nix {
+          inherit pkgs;
+          module = self.homeManagerModules.default;
+        };
+      });
+
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [

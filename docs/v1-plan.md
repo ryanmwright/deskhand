@@ -683,10 +683,33 @@ Dependency order:
 
 ### M13: Nix packaging and VM e2e test
 - [ ] `packages.default` (buildRustPackage, libpulse, .desktop file, unit template)
-- [ ] `homeManagerModules.default` (`services.deskhand.{enable,package,settings,passwordFile,tray}`)
+- [ ] `homeManagerModules.default` (`services.deskhand.{enable,package,settings,passwordFile,tray}`).
+      **Base module done early (after M9):** everything except `tray` (M12); see the note below
 - [ ] `checks.kde-e2e` (runNixOSTest) plus a nightly CI job
 - **Accept:** `nix build` and `nix flake check` pass; the HM module gives a working service with
   the password outside the store.
+
+- **Base Home Manager module (pulled forward after M9, so the user can run Deskhand on the KDE
+  host):** `nix/hm-module.nix`, exported as `homeManagerModules.default` and
+  `homeModules.default`. Options: `enable`, `package` (defaults to this flake's package),
+  `settings` (freeform TOML, so later config keys need no module change) and `passwordFile`
+  (sets `mqtt.password_file`). Assertions reject `settings.mqtt.password` (it would land in the
+  store) and require `mqtt.host`. The config is generated into the store and also linked to
+  `~/.config/deskhand/config.toml`, so `deskhand doctor` finds it. The user unit is
+  `Type=notify`, `PartOf`/`After`/`WantedBy=graphical-session.target`, `Restart=on-failure`.
+  - `checks.<system>.hm-module` (`nix/hm-module-check.nix`) evaluates the module against a stub
+    of the Home Manager options it sets (no home-manager input) and checks the rendered config,
+    the unit and the password assertion.
+  - Checked with real Home Manager (release-26.05) in a throwaway flake for the VM's `dev`
+    user. HM activation cannot run in the VM (the guest's Nix does not know host-built store
+    paths), so the generated unit, wants link and config were linked in by hand. The service
+    reached `active (running)` through the notify handshake, read the password from
+    `passwordFile`, and HA showed the device under the module's name. `deskhand doctor` with
+    no `--config` used the linked config.
+  - Still in M13: `tray`, the `.desktop` file and icon, and the `kde-e2e` NixOS test.
+  - Disk: a second release build of the package in a flake with a different nixpkgs pin
+    filled the disk (17 GB free before). Make test flakes follow `deskhand/nixpkgs` so they
+    reuse the package.
 
 ### M14: Docs and release
 - [ ] README (features, quick start), `docs/configuration.md`, `docs/entities.md`,
@@ -731,6 +754,7 @@ Dependency order:
 | 2026-11-01 | M7 | UPower battery/AC/dynamic peripheral batteries, power-profile select, NetworkManager connectivity and SSID, BlueZ adapter and dynamic device switches, systemd user-unit switches (allowlist), GameMode; mocks for all six services and 9 tests. systemd and power profile checked in the VM; Bluetooth needs a check on the KDE host (no adapter here). Signal matching uses the service's unique name, with a restart when the owner changes |
 | 2026-11-01 | M8 | Notifications (notify entity, rich JSON with tag/actions/inline reply/dismiss, `notification_event`) and media (`MediaSource` + `MediaKit` in common, MPRIS multiplexer, art from file/data URLs, HACS `mqtt_media_player` compat renderer with per-field diffing). Checked in the VM: a notification action fired an HA automation, the inline reply arrived, and HA controlled mpv's play/pause, volume and seek, including through the compat player. 13 new tests, `MockMpris`/`MockNotifications`, `TestRig` moved to core. Fixed: notifications held up the startup barrier while plasmashell started. New `dev/vm/click.sh` (QMP) and `dev/ha/api.sh` |
 | 2026-11-01 | M9 | AudioKit (common) + libpulse thread (volume, mute, device selects, mic, `mic_in_use` with apps, headphones), camera (inotify trigger, 250 ms settle, `/proc` scan, hotplug), `in_call` derived sensor. Checked in the VM with virtual devices: volume sync both ways, output switching, mic/camera/in_call with app names. Fixed a hub bug: a select state using a new option was rejected by HA and never resent. 7 new tests. Browser call, PipeWire camera use and corked mic still to check on the KDE host |
+| 2026-11-01 | M13 (part) | Base Home Manager module pulled forward: `homeManagerModules.default` (`enable`, `package`, `settings`, `passwordFile`), a stub-based `checks.hm-module`, checked with real Home Manager in the VM. Also fixed a clippy lint that only the newer stable toolchain in CI reports (M8 push was red) |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.
