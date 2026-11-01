@@ -1,0 +1,12 @@
+# Deskhand config inside the Plasma VM (`just vm`): the dev broker runs on the host,
+# which QEMU's user network exposes as 10.0.2.2.
+[device]
+name = "Deskhand Plasma VM"
+
+[general]
+log = "info,deskhand_mqtt=debug"
+
+[mqtt]
+host = "10.0.2.2"
+username = "deskhand"
+password = "deskhand-dev"

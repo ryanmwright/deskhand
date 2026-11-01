@@ -64,6 +64,7 @@
             jq
             curl
             nixfmt
+            socat # VM monitor (just vm-screenshot)
           ];
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           shellHook = ''
@@ -75,6 +76,50 @@
           '';
         };
       });
+
+      # Plasma 6 Wayland test VM (nix/plasma-vm.nix). x86_64 only: it needs KVM.
+      nixosConfigurations.plasma-vm = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [ ./nix/plasma-vm.nix ];
+      };
+
+      apps.x86_64-linux.plasma-vm =
+        let
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+          vm = self.nixosConfigurations.plasma-vm.config.system.build.vm;
+          launcher = pkgs.writeShellApplication {
+            name = "plasma-vm";
+            runtimeInputs = [
+              pkgs.openssh
+              pkgs.coreutils
+              pkgs.gnugrep
+            ];
+            text = ''
+              ws="''${DESKHAND_WORKSPACE:-$PWD}"
+              if ! grep -qs deskhand-core "$ws/Cargo.toml"; then
+                echo "plasma-vm: run this from the Deskhand repository (or set DESKHAND_WORKSPACE)" >&2
+                exit 1
+              fi
+              DESKHAND_WORKSPACE="$(realpath "$ws")"
+              export DESKHAND_WORKSPACE
+              state="$DESKHAND_WORKSPACE/dev/vm"
+              mkdir -p "$state/ssh"
+              if [ ! -f "$state/ssh/id_ed25519" ]; then
+                ssh-keygen -q -t ed25519 -N "" -C deskhand-plasma-vm -f "$state/ssh/id_ed25519"
+              fi
+              # Nix-built QEMU links everything it needs; a host LD_LIBRARY_PATH
+              # (for example a newer alsa-lib) breaks it.
+              unset LD_LIBRARY_PATH
+              export NIX_DISK_IMAGE="''${NIX_DISK_IMAGE:-$state/plasma-vm.qcow2}"
+              exec ${vm}/bin/run-plasma-vm-vm "$@"
+            '';
+          };
+        in
+        {
+          type = "app";
+          program = "${launcher}/bin/plasma-vm";
+          meta.description = "Plasma 6 Wayland VM with the workspace shared at /mnt/deskhand";
+        };
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };

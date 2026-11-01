@@ -12,8 +12,13 @@ publish = false
 deskhand-core = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 testcontainers.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 zbus.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

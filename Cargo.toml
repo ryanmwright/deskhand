@@ -30,6 +30,7 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "signal", "
 tokio-util = "0.7.20"
 async-trait = "0.1.92"
 bytes = "1.12"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 
 # MQTT: rustls with the ring provider (aws-lc needs cmake/nasm)
 rumqttc = { version = "0.25.1", default-features = false, features = ["use-rustls-no-provider"] }

@@ -9,3 +9,4 @@ dev/mosquitto/data/
 dev/mosquitto/log/
 *.snap.new
 *.pending-snap
+dev/vm/ssh/

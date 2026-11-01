@@ -51,6 +51,29 @@ dev-reset:
 mqtt-watch:
     mosquitto_sub -h localhost -u homeassistant -P homeassistant-dev -v -t '#'
 
-# Boot the Plasma 6 test VM (added in M4)
+# Boot the Plasma 6 Wayland test VM (window; state in dev/vm/plasma-vm.qcow2)
 vm:
     nix run .#plasma-vm
+
+# Boot the VM without a window (QEMU monitor at /tmp/plasma-vm.mon for screenshots)
+vm-headless:
+    QEMU_OPTS="-display none -monitor unix:/tmp/plasma-vm.mon,server,nowait" nix run .#plasma-vm
+
+# ssh into the VM (or run a command there)
+vm-ssh *ARGS:
+    dev/vm/ssh.sh {{ARGS}}
+
+# Rebuild deskhand on the host and restart it in the VM
+vm-deploy:
+    cargo build -p deskhand
+    dev/vm/ssh.sh 'systemctl --user restart deskhand-dev && systemctl --user --no-pager status deskhand-dev | head -3'
+
+# Save a screenshot of a headless VM to /tmp/plasma-vm.png
+vm-screenshot:
+    echo "screendump /tmp/plasma-vm.png -f png" | socat - UNIX-CONNECT:/tmp/plasma-vm.mon >/dev/null
+    @sleep 1
+    @echo /tmp/plasma-vm.png
+
+# Delete the VM disk (the next boot starts fresh)
+vm-reset:
+    rm -f dev/vm/plasma-vm.qcow2

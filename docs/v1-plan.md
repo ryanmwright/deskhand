@@ -390,15 +390,40 @@ Dependency order:
     finished, so the script now waits on `/api/` and treats 404 as done.
 
 ### M4: Plasma VM and D-Bus testkit
-- [ ] **Prerequisite: disk.** The Plasma closure, Rust targets and HA image need about 40 GB.
-      The user grew the disk on 2026-11-01 (256 GB, 95 GB free). Still to do: run
-      `nix-collect-garbage -d` once (ask first; it deletes old Nix generations).
-- [ ] `nixosConfigurations.plasma-vm` + `apps.plasma-vm`: Plasma 6 Wayland, SDDM autologin,
+- [x] **Prerequisite: disk.** The Plasma closure, Rust targets and HA image need about 40 GB.
+      The user grew the disk on 2026-11-01 (256 GB). The VM closure took about 17 GB; 78 GB is
+      still free, so `nix-collect-garbage -d` was not needed (and was not run).
+- [x] `nixosConfigurations.plasma-vm` + `apps.plasma-vm`: Plasma 6 Wayland, SDDM autologin,
       4 GB RAM, 4 vCPU, virtio-gpu, host broker at 10.0.2.2, workspace shared over 9p, runs a
       deskhand user service from the shared build. Nested KVM is available here
-- [ ] TestBus (private session and system buses); first mocks (logind, ScreenSaver)
+- [x] TestBus (private session and system buses); first mocks (logind, ScreenSaver)
 - **Accept:** the VM boots into a Plasma Wayland desktop and `org.kde.KWin` is on its bus; a mock
   bus test passes in CI.
+- **Status:** done locally. The VM boots to the Plasma desktop in about 30 s (checked with a QEMU
+  screenshot). Over ssh: `XDG_SESSION_TYPE=wayland`, `XDG_CURRENT_DESKTOP=KDE`, and
+  `org.kde.KWin`, `org.kde.plasmashell` and `org.freedesktop.ScreenSaver` are on the session bus.
+  The `deskhand-dev` service (host build, `Type=notify`) reached the host broker and its entities
+  appeared in HA. The 4 mock bus tests pass locally; CI installs `dbus` and the tests fail there,
+  instead of skipping, if `dbus-daemon` is missing.
+- **Notes:**
+  - VM definition: `nix/plasma-vm.nix`. Disk image and generated ssh key live in `dev/vm/`
+    (ignored by git). The launcher refuses to run outside the repository, exports
+    `DESKHAND_WORKSPACE` for the 9p share and unsets `LD_LIBRARY_PATH`. The developer's shell
+    exported a newer alsa-lib there, which broke QEMU with a glibc symbol error.
+  - The host's `/nix/store` is shared into the VM, so `cargo build` on the host is enough;
+    `just vm-deploy` rebuilds and restarts the service. The VM user `dev` has uid 1000 to match
+    the host user on the 9p share.
+  - ssh on 127.0.0.1:2222 with a key the launcher generates (`dev/vm/ssh.sh`, `just vm-ssh`).
+    Password login is off. `just vm-headless` + `just vm-screenshot` (QEMU writes PNG itself)
+    let an agent check the desktop without a window.
+  - virtio-vga without host GL (software rendering), so the VM also runs headless.
+  - CI evaluates the VM derivation and checks formatting of `nix/*.nix`; building and booting
+    it in CI is the M13 nightly job.
+  - Mocks: `MockLogind` (Manager with GetSession/`auto`, Can*, power calls, Inhibit returning a
+    pipe fd whose closing releases the lock, PrepareForSleep, IdleHint/LidClosed/Docked/
+    *Inhibited properties; Session at `_31` and `auto` with LockedHint, Lock/Unlock signals) and
+    `MockScreenSaver` (both KDE paths, idle time, Inhibit/UnInhibit, ActiveChanged). Handles
+    change state with `PropertiesChanged` and record calls.
 
 ### M5: KDE risk spikes
 - [ ] `examples/` probes run inside the VM: ext-idle-notify v2 (and its behaviour while video
@@ -508,6 +533,7 @@ Dependency order:
 | 2026-11-01 | M1 | Core model, hub, supervisor, config and identity in `deskhand-core`; `FakeTransport` behind a `test-util` feature, re-exported by the testkit. 50 tests on paused time, stable over 30 runs. Deviations recorded under M1 |
 | 2026-11-01 | M2 | MQTT transport (device discovery, stale cleanup, birth, LWT, reconnect, pause, sleep), `deskhand run` with a version/start-time integration, Linux file-based identity, `just run` and `dev/ha/states.sh`. Bug found by an integration test: an aborted transport left its poll task holding the connection (no LWT); fixed |
 | 2026-11-01 | M3 | `doctor [--json]`, `print-discovery [--all]`, `uninstall` (admin MQTT client), journald priorities, sd-notify READY/STOPPING via `HubHandle::wait_released`. Scripts, command sensors, sysinfo metrics (GPU via sysinfo, sampled on its own thread because `Gpus` is not `Send`), `boot_time`, derived-sensor helpers (`Inputs`, `Debounced`). CI `release-binary` job on ubuntu-22.04 and `docs/dev/deploy-to-host.md`. Acceptance checked against the dev HA. Fixed `bootstrap.sh` re-runs. User grew the disk (95 GB free) for M4 |
+| 2026-11-01 | M4 | Plasma 6 Wayland VM (`nix/plasma-vm.nix`, `just vm`/`vm-headless`/`vm-ssh`/`vm-deploy`/`vm-screenshot`), workspace over 9p, host build as a `deskhand-dev` user service reporting to the host broker; checked by screenshot, over ssh (KWin on the bus) and in HA. `TestBus` plus logind and ScreenSaver mocks with 4 tests. Launcher unsets a host `LD_LIBRARY_PATH` that broke QEMU |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

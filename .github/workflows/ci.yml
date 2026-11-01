@@ -100,4 +100,6 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix build .#deskhand --print-build-logs
       - run: nix flake check --no-build
-      - run: nix fmt -- --check flake.nix
+      - run: nix fmt -- --check flake.nix nix/*.nix
+      # Evaluates the Plasma VM (building it needs ~17 GB; the nightly VM job comes in M13).
+      - run: nix eval .#nixosConfigurations.plasma-vm.config.system.build.vm.drvPath
