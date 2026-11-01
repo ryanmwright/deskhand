@@ -31,7 +31,7 @@ mod supervisor_tests;
 pub use config::{Config, ConfigError, Enabled, IntegrationConfig};
 pub use ctx::{Commands, Ctx};
 pub use entity::{Attributes, CommandValue, EntityId, EntityKind, EntitySpec, State};
-pub use hub::{Hub, HubHandle, HubOptions, Lifecycle};
+pub use hub::{Hub, HubHandle, HubOptions, HubStatus, Lifecycle};
 pub use identity::{DeviceInfo, PlatformIdentity};
 pub use integration::{Integration, IntegrationError, Probe};
 pub use supervisor::{StatusHandle, Supervisor, SupervisorOptions};

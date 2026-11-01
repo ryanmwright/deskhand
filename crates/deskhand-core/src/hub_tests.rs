@@ -290,12 +290,28 @@ async fn pause_stops_publishing_and_unpause_resyncs() {
 async fn reconnecting_while_paused_reports_pause() {
     let (hub, mut t, _) = setup();
     let _c = live(&hub, &mut t, "a").await;
+    let status = hub.status();
+    assert_eq!(
+        *status.borrow(),
+        crate::HubStatus {
+            connected: true,
+            paused: false
+        }
+    );
     hub.set_paused(true);
     t.disconnect();
     t.drain().await;
+    assert_eq!(
+        *status.borrow(),
+        crate::HubStatus {
+            connected: false,
+            paused: true
+        }
+    );
     t.connect();
     let evs = t.drain().await;
     assert_eq!(evs, vec![HubEvent::Pause(true)]);
+    assert!(status.borrow().connected);
 }
 
 #[tokio::test(start_paused = true)]

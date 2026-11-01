@@ -8,6 +8,10 @@ mod doctor;
 mod logging;
 mod print_discovery;
 mod run;
+#[cfg(feature = "setup")]
+mod setup;
+#[cfg(feature = "tray")]
+mod tray;
 mod uninstall;
 mod wiring;
 
@@ -42,6 +46,10 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Set up Deskhand: find the broker, test the connection, write the config
+    /// and install the systemd user service.
+    #[cfg(feature = "setup")]
+    Setup(setup::Options),
     /// Remove everything this device published from the broker (and so from Home Assistant).
     Uninstall {
         /// Don't ask for confirmation.
@@ -64,6 +72,7 @@ fn default_config_path() -> PathBuf {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let explicit_config = cli.config.is_some();
     let config_path = cli.config.unwrap_or_else(default_config_path);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -81,6 +90,11 @@ fn main() -> anyhow::Result<()> {
             // Don't wait for background tasks (a hung probe) on the way out.
             runtime.shutdown_background();
             std::process::exit(if report.ok { 0 } else { 1 });
+        }
+        #[cfg(feature = "setup")]
+        Command::Setup(options) => {
+            logging::init("warn");
+            runtime.block_on(setup::setup(&config_path, explicit_config, options))
         }
         Command::PrintDiscovery { all } => {
             runtime.block_on(print_discovery::print(&config_path, all))

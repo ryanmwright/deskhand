@@ -38,7 +38,7 @@ pub fn describe_connection_error(e: &ConnectionError) -> String {
                 "the broker rejected the username or password".into()
             }
             ConnectReturnCode::NotAuthorized => {
-                "the broker refused the connection: not authorised (check the username and the broker's ACL)".into()
+                "the broker refused the connection: not authorised (check the username, the password and the broker's ACL)".into()
             }
             ConnectReturnCode::BadClientId => "the broker rejected the client id".into(),
             ConnectReturnCode::ServiceUnavailable => "the broker is unavailable".into(),

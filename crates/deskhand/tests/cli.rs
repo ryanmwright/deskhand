@@ -153,3 +153,57 @@ fn uninstall_without_broker_fails() {
         "{stderr}"
     );
 }
+
+#[test]
+fn setup_without_prompts_writes_a_private_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("deskhand/config.toml");
+    let setup = |extra: &[&str]| {
+        let mut cmd = deskhand();
+        cmd.arg("--config").arg(&path).args([
+            "setup",
+            "--yes",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "1",
+            "--username",
+            "deskhand",
+            "--password-stdin",
+            "--name",
+            "Setup Test",
+            "--no-service",
+        ]);
+        cmd.args(extra).write_stdin("s3cret\n");
+        cmd
+    };
+    // The connection test fails: nothing listens on port 1.
+    let out = setup(&[]).assert().failure();
+    assert!(String::from_utf8_lossy(&out.get_output().stderr).contains("cannot connect"));
+    assert!(!path.exists());
+
+    setup(&["--skip-test"]).assert().success();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("s3cret"), "{text}");
+
+    // An existing config needs --force.
+    setup(&["--skip-test"]).assert().failure();
+    setup(&["--skip-test", "--force"]).assert().success();
+    assert!(path.with_extension("toml.bak").exists());
+
+    // The daemon's own tools accept it.
+    let out = deskhand()
+        .arg("--config")
+        .arg(&path)
+        .args(["doctor", "--json"])
+        .assert()
+        .code(1);
+    let report: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["config"]["ok"], true);
+    assert_eq!(report["config"]["warnings"], serde_json::json!([]));
+    assert_eq!(report["device"]["name"], "Setup Test");
+    assert_eq!(report["mqtt"]["username"], "deskhand");
+}

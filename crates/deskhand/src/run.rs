@@ -58,8 +58,21 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
         }
     });
 
+    // Quit from the tray.
+    let quit = CancellationToken::new();
+    #[cfg(feature = "tray")]
+    if setup.general.tray {
+        tokio::spawn(crate::tray::run(
+            hub_handle.clone(),
+            setup.device.name.clone(),
+            config_path.to_owned(),
+            quit.clone(),
+        ));
+    }
+
     tokio::select! {
         signal = shutdown_signal() => tracing::info!(signal, "shutting down"),
+        () = quit.cancelled() => tracing::info!("quit from the tray"),
         res = &mut transport_task => {
             // The transport only returns on shutdown; anything else is fatal.
             cancel.cancel();
@@ -73,6 +86,7 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
     }
 
     notify_systemd(&[sd_notify::NotifyState::Stopping]);
+    quit.cancel();
     cancel.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(7), supervisor_task).await;
     hub_handle.shutdown();

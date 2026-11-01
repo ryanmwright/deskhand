@@ -126,6 +126,15 @@ impl Default for HubOptions {
     }
 }
 
+/// What the tray shows: broker connection and the pause toggle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HubStatus {
+    /// The transport is connected to the broker.
+    pub connected: bool,
+    /// Publishing is paused.
+    pub paused: bool,
+}
+
 /// Cloneable access to a running hub.
 #[derive(Debug, Clone)]
 pub struct HubHandle {
@@ -133,6 +142,7 @@ pub struct HubHandle {
     watches: Watches,
     lifecycle: broadcast::Sender<Lifecycle>,
     released: watch::Receiver<bool>,
+    status: watch::Receiver<HubStatus>,
 }
 
 impl HubHandle {
@@ -192,6 +202,11 @@ impl HubHandle {
         self.lifecycle.subscribe()
     }
 
+    /// Connection and pause state, updated as they change.
+    pub fn status(&self) -> watch::Receiver<HubStatus> {
+        self.status.clone()
+    }
+
     /// Resolves once the startup barrier has released (every started
     /// integration is ready, or the timeout passed). Used for systemd's
     /// `READY=1`. Also resolves if the hub stops first.
@@ -243,6 +258,7 @@ pub struct Hub {
     watches: Watches,
     lifecycle: broadcast::Sender<Lifecycle>,
     released_tx: watch::Sender<bool>,
+    status_tx: watch::Sender<HubStatus>,
 
     entities: BTreeMap<EntityId, EntityEntry>,
     json: BTreeMap<EntityId, JsonEntry>,
@@ -284,11 +300,13 @@ impl Hub {
         let watches: Watches = Arc::new(Mutex::new(HashMap::new()));
         let (lifecycle, _) = broadcast::channel(16);
         let (released_tx, released) = watch::channel(false);
+        let (status_tx, status) = watch::channel(HubStatus::default());
         let handle = HubHandle {
             tx,
             watches: watches.clone(),
             lifecycle: lifecycle.clone(),
             released,
+            status,
         };
         let barrier_deadline = Instant::now() + opts.max_startup;
         let hub = Self {
@@ -299,6 +317,7 @@ impl Hub {
             watches,
             lifecycle,
             released_tx,
+            status_tx,
             entities: BTreeMap::new(),
             json: BTreeMap::new(),
             availability: BTreeMap::new(),
@@ -340,6 +359,15 @@ impl Hub {
                     Flow::Continue
                 }
             };
+            let status = HubStatus {
+                connected: self.connected,
+                paused: self.paused,
+            };
+            self.status_tx.send_if_modified(|s| {
+                let changed = *s != status;
+                *s = status;
+                changed
+            });
             if let Flow::Stop = flow {
                 break;
             }

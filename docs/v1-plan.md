@@ -802,16 +802,51 @@ Dependency order:
     driving the volume through a stream.
 
 ### M12: Setup wizard and tray
-- [ ] `deskhand setup`: broker discovery in this order: mDNS `_mqtt._tcp`, then
+- [x] `deskhand setup`: broker discovery in this order: mDNS `_mqtt._tcp`, then
       `_home-assistant._tcp` host on port 1883, then `homeassistant.local`, then localhost.
       Credentials and TLS; connection test with readable CONNACK errors; atomic 0600 write
-- [ ] Install, enable and start the systemd user unit (`PartOf`/`After`/`WantedBy=graphical-session.target`,
+- [x] Install, enable and start the systemd user unit (`PartOf`/`After`/`WantedBy=graphical-session.target`,
       `Type=notify`, `Restart=on-failure`); if the binary is in /nix/store, point to the
       home-manager module instead
-- [ ] ksni tray (status, Pause, open config, quit; only when a StatusNotifierWatcher exists);
+- [x] ksni tray (status, Pause, open config, quit; only when a StatusNotifierWatcher exists);
       polish doctor output
 - **Accept:** setup on a fresh VM user ends with a running service and the device in HA; Pause
   makes the device unavailable.
+- **Status:** done, checked in the VM as `dev` with no Deskhand config or unit (the
+  `deskhand-dev` service stopped, since it has the same node id):
+  - The interactive wizard (driven with `expect` over `ssh -tt`): manual host 10.0.2.2, a wrong
+    password first ("not authorised", then "Change the settings" with the answers pre-filled),
+    then the right one, "✓ Connected to the broker", config written, service installed and
+    started. The config was 0600 in a 0700 directory, the password in its own 0600 file.
+    `deskhand doctor` showed the service active and the daemon online, and HA had live states.
+  - Tray: the icon showed in Plasma's tray; its menu showed "plasma-vm: Connected", Pause, Open
+    config file, Quit. Pause published `offline` (entities unavailable in HA, except the
+    always-available `session_state`) and switched the icon; unpausing brought it back. Quit
+    stopped the daemon with status 0, and systemd left it stopped.
+  - 6 new tests: setup (config round trip with permissions and backup, TLS/anonymous rendering,
+    candidate order, unit file and Nix-store detection), a CLI test of `setup --yes` (failed
+    connection test, `--skip-test`, `--force`, doctor reads the result), the tray icon mapping,
+    plus hub status assertions.
+- **Notes and deviations:**
+  - `setup --yes` runs without prompts from flags (`--host`, `--port`, `--username`,
+    `--password-stdin`, `--tls`, `--ca-file`, `--name`, `--no-service`, `--skip-test`,
+    `--force`). An existing config is replaced only after confirmation or with `--force`, and
+    kept as `config.toml.bak`. The config holds `password_file` next to it, never the password.
+    The device name is written only if it differs from the default.
+  - mDNS browses for 3 s. A found host name is used if it accepts TCP here, else its address.
+    Reachable candidates are listed first.
+  - The unit gets `--config` only when setup ran with an explicit `--config`. A unit that is a
+    symlink into the Nix store (Home Manager) is never replaced.
+  - Core: `HubHandle::status()` (a watch of `HubStatus { connected, paused }`) feeds the tray.
+  - The tray shows when `[general] tray = true` and ksni can register with a
+    StatusNotifierWatcher; otherwise it logs and the daemon runs without it. Icons are theme
+    names (`user-online`, `user-away` when paused, `user-offline`); our own icon comes with the
+    `.desktop` file in M13.
+  - Doctor: shows the `deskhand.service` state (with a hint when not installed or failed),
+    suggests `deskhand setup` when the config is missing, and no longer repeats the underlying
+    error (`ConfigError` keeps it in the message instead of `source()`). Mosquitto answers a
+    wrong password with "not authorised", so that message now mentions the password.
+  - `dev/vm/click.sh X Y right` right-clicks (tray menus).
 
 ### M13: Nix packaging and VM e2e test
 - [ ] `packages.default` (buildRustPackage, libpulse, .desktop file, unit template)
@@ -901,6 +936,7 @@ Dependency order:
 | 2026-11-01 | Host fixes | From the user's KDE host: (1) D-Bus re-reads waited for a quiet gap that never came on busy services (NetworkManager scanning, BlueZ, some players), so `wifi_ssid` and media entities froze; settling is now capped. (2) Bluetooth power-on failed with "Failed" after Plasma turned Bluetooth off: Plasma soft-blocks it with rfkill; Deskhand now lifts the block through `/dev/rfkill` first. (3) Chromium-based players' fixed MPRIS volume is treated as absent. (4) VLC owns two MPRIS names and showed up twice; `X` and `X.instance<N>` of one process are merged. Per-app volume added as a V1 follow-up |
 | 2026-11-01 | M11 | KDE crate: kglobalaccel custom shortcuts (`[[shortcut]]` → `shortcut_<id>` events, four-int key encoding, stale actions removed first) and allowlisted invoke buttons, PowerDevil per-display brightness, DPMS `screens_on` switch over KWin's Wayland protocol (new spike probe) with a PowerDevil fallback button, opt-in logout and output switches. All checked in the VM, including a real key press driving an HA automation and the entry in System Settings. 19 new tests and three Plasma mocks; the kglobalaccel mock caught a `(ssss)`-instead-of-`as` action id. `just vm-ssh` quoting fixed |
 | 2026-11-01 | Follow-up | Per-app volume: shared `Streams` registry in `LinuxEnv` fed by the pulse thread (sink-inputs, stream-volume setter); MPRIS players without a usable volume (Chromium-based) use their streams, matched by process tree, then name. Checked in the VM with real Chromium. Host feedback: Bluetooth and monitor brightness confirmed |
+| 2026-11-01 | M12 | `deskhand setup` (mDNS/fallback broker discovery, credentials and TLS, connection test with retry, atomic 0600 config plus password file, systemd user unit or a Home Manager hint; `--yes` for scripts), ksni tray (status, Pause, open config, Quit) over a new `HubHandle::status()` watch, doctor shows the service state. Checked in the VM: interactive setup to a running service and the device in HA; Pause/unpause/Quit from the tray. 6 new tests |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

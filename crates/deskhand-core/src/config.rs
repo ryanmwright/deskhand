@@ -16,25 +16,24 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 
 /// Errors loading or interpreting the config.
+/// The underlying error is part of the message (not a `source()`), so
+/// `{:#}` chains don't repeat it.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("cannot read config file {path}: {source}")]
+    #[error("cannot read config file {path}: {error}")]
     Io {
         path: PathBuf,
-        #[source]
-        source: std::io::Error,
+        error: std::io::Error,
     },
-    #[error("invalid TOML in {}: {source}", path.as_ref().map_or("config".into(), |p| p.display().to_string()))]
+    #[error("invalid TOML in {}: {error}", path.as_ref().map_or("config".into(), |p| p.display().to_string()))]
     Parse {
         path: Option<PathBuf>,
-        #[source]
-        source: toml::de::Error,
+        error: toml::de::Error,
     },
-    #[error("invalid [{section}] config: {source}")]
+    #[error("invalid [{section}] config: {error}")]
     Section {
         section: String,
-        #[source]
-        source: toml::de::Error,
+        error: toml::de::Error,
     },
 }
 
@@ -107,15 +106,15 @@ impl Config {
             .parse::<toml::Table>()
             .map_err(|source_err| ConfigError::Parse {
                 path: source.clone(),
-                source: source_err,
+                error: source_err,
             })?;
         Ok(Self { raw, source })
     }
 
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+        let text = std::fs::read_to_string(path).map_err(|error| ConfigError::Io {
             path: path.to_owned(),
-            source,
+            error,
         })?;
         Self::from_toml_str(&text, Some(path.to_owned()))
     }
@@ -160,16 +159,16 @@ impl Config {
             .map(|v| {
                 v.as_table().cloned().ok_or_else(|| ConfigError::Section {
                     section: section.clone(),
-                    source: serde::de::Error::custom("expected a table"),
+                    error: serde::de::Error::custom("expected a table"),
                 })
             })
             .transpose()?
             .unwrap_or_default();
         let enabled = match options.remove("enabled") {
             None => Enabled::Auto,
-            Some(v) => Enabled::deserialize(v).map_err(|source| ConfigError::Section {
+            Some(v) => Enabled::deserialize(v).map_err(|error| ConfigError::Section {
                 section: section.clone(),
-                source,
+                error,
             })?,
         };
         Ok(IntegrationConfig {
@@ -206,9 +205,9 @@ fn deserialize_value<T: DeserializeOwned>(
     let value = serde_ignored::deserialize(value, |path| {
         unknown_keys.push(format!("{section}.{path}"));
     })
-    .map_err(|source| ConfigError::Section {
+    .map_err(|error| ConfigError::Section {
         section: section.to_owned(),
-        source,
+        error,
     })?;
     Ok(Parsed {
         value,

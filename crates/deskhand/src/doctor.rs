@@ -25,6 +25,10 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mqtt: Option<MqttReport>,
     pub integrations: Vec<CapabilityReport>,
+    /// State of the `deskhand.service` user unit (`active`, `inactive`,
+    /// `failed`, `not installed`, ...); absent without systemd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +108,35 @@ fn features() -> Vec<&'static str> {
     f
 }
 
+/// The user unit's active state, or `not installed`.
+async fn service_state() -> Option<String> {
+    let out = tokio::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            "--property=LoadState,ActiveState",
+            "--value",
+            "deskhand.service",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output();
+    let out = tokio::time::timeout(Duration::from_secs(3), out)
+        .await
+        .ok()?
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let (load, active) = (lines.next()?, lines.next()?);
+    Some(if load == "not-found" {
+        "not installed".into()
+    } else {
+        active.to_owned()
+    })
+}
+
 pub async fn report(config_path: &Path) -> Report {
     let environment = Environment {
         os: std::env::consts::OS,
@@ -111,9 +144,14 @@ pub async fn report(config_path: &Path) -> Report {
         session_type: std::env::var("XDG_SESSION_TYPE").ok(),
         features: features(),
     };
+    let service = service_state().await;
     let setup = match Setup::load(config_path) {
         Ok(s) => s,
         Err(e) => {
+            let mut error = format!("{e:#}");
+            if !config_path.exists() {
+                error += "\n    run `deskhand setup` to create it";
+            }
             return Report {
                 ok: false,
                 version: deskhand_core::VERSION,
@@ -121,12 +159,13 @@ pub async fn report(config_path: &Path) -> Report {
                 config: ConfigReport {
                     path: config_path.display().to_string(),
                     ok: false,
-                    error: Some(format!("{e:#}")),
+                    error: Some(error),
                     warnings: Vec::new(),
                 },
                 device: None,
                 mqtt: None,
                 integrations: Vec::new(),
+                service,
             };
         }
     };
@@ -147,6 +186,7 @@ pub async fn report(config_path: &Path) -> Report {
         }),
         mqtt: Some(mqtt),
         integrations,
+        service,
     }
 }
 
@@ -281,6 +321,14 @@ pub fn print_text(r: &Report) {
     }
     if let Some(d) = &r.device {
         println!("  Device \"{}\" (node id {})", d.name, d.node_id);
+    }
+    if let Some(state) = &r.service {
+        let hint = match state.as_str() {
+            "not installed" => " (run `deskhand setup`, or use the Home Manager module)",
+            "failed" => " (see `journalctl --user -u deskhand.service`)",
+            _ => "",
+        };
+        println!("  Service deskhand.service: {state}{hint}");
     }
     if let Some(m) = &r.mqtt {
         let user = m

@@ -131,7 +131,7 @@ impl Setup {
     }
 }
 
-fn platform_identity() -> deskhand_core::PlatformIdentity {
+pub(crate) fn platform_identity() -> deskhand_core::PlatformIdentity {
     #[cfg(feature = "linux")]
     {
         deskhand_linux::platform_identity()
