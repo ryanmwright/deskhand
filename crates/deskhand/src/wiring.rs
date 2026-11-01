@@ -9,7 +9,7 @@ use deskhand_core::{Config, DeviceInfo, Integration};
 use deskhand_mqtt::MqttConfig;
 
 /// Top-level config sections owned by crates other than the core.
-pub const KNOWN_SECTIONS: &[&str] = &["mqtt", "script", "sensor"];
+pub const KNOWN_SECTIONS: &[&str] = &["mqtt", "script", "sensor", "shortcut"];
 
 /// Config plus everything derived from it.
 #[derive(Debug)]
@@ -20,6 +20,8 @@ pub struct Setup {
     pub mqtt: MqttConfig,
     pub scripts: Scripts,
     pub sensors: CommandSensors,
+    /// `[[shortcut]]` entries, registered by the desktop backend.
+    pub shortcuts: Vec<deskhand_common::shortcuts::Shortcut>,
     /// Unknown keys and sections, as `config.key` paths.
     pub warnings: Vec<String>,
 }
@@ -46,6 +48,11 @@ impl Setup {
         unknown(scripts.unknown_keys);
         let sensors = CommandSensors::load(&config)?;
         unknown(sensors.unknown_keys);
+        let shortcuts = deskhand_common::shortcuts::load(&config)?;
+        unknown(shortcuts.unknown_keys);
+        let shortcuts = deskhand_common::shortcuts::check(shortcuts.value)?;
+        #[cfg(feature = "kde")]
+        deskhand_kde::check_shortcut_keys(&shortcuts).map_err(anyhow::Error::msg)?;
         for section in config.unknown_sections(KNOWN_SECTIONS) {
             warnings.push(format!("unknown section [{section}]"));
         }
@@ -56,6 +63,7 @@ impl Setup {
             mqtt: mqtt.value,
             scripts: Scripts::new(scripts.value)?,
             sensors: CommandSensors::new(sensors.value)?,
+            shortcuts,
             config,
             warnings,
         })
@@ -91,7 +99,7 @@ impl Setup {
             // Desktop backends first: they win where they share a capability
             // with the generic Linux integrations (appearance).
             #[cfg(feature = "kde")]
-            list.extend(deskhand_kde::candidates(&env));
+            list.extend(deskhand_kde::candidates(&env, self.kde_settings()));
             list.extend(deskhand_linux::candidates(
                 &env,
                 self.general.idle_threshold,
@@ -99,6 +107,27 @@ impl Setup {
             ));
         }
         list
+    }
+
+    /// Config the KDE integrations need beyond their own section. Option
+    /// errors here are reported when the integration reads its section.
+    #[cfg(feature = "kde")]
+    fn kde_settings(&self) -> deskhand_kde::KdeSettings {
+        let options = |capability: &str| self.config.integration(capability).ok();
+        deskhand_kde::KdeSettings {
+            shortcuts: self.shortcuts.clone(),
+            invoke: options("shortcuts")
+                .and_then(|c| {
+                    c.options::<deskhand_kde::shortcuts::ShortcutsOptions>()
+                        .ok()
+                })
+                .map(|p| p.value.invoke)
+                .unwrap_or_default(),
+            logout: options("power")
+                .and_then(|c| c.options::<deskhand_linux::power::PowerOptions>().ok())
+                .is_some_and(|p| p.value.buttons.iter().any(|b| b == "logout")),
+            outputs: options("outputs").is_some_and(|c| c.enabled == deskhand_core::Enabled::On),
+        }
     }
 }
 

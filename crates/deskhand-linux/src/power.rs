@@ -46,7 +46,8 @@ const DISCONNECT_GRACE: Duration = Duration::from_millis(1200);
 #[serde(default)]
 pub struct PowerOptions {
     /// Buttons to offer, if logind allows them: suspend, hibernate,
-    /// hybrid_sleep, suspend_then_hibernate, reboot, poweroff.
+    /// hybrid_sleep, suspend_then_hibernate, reboot, poweroff. `logout` is
+    /// offered by the desktop backend (KDE), not here.
     pub buttons: Vec<String>,
 }
 
@@ -244,7 +245,9 @@ impl Integration for PowerLogind {
             let Some((_, can, action, id, label, icon, class)) =
                 BUTTONS.iter().find(|b| b.0 == name).cloned()
             else {
-                tracing::warn!(button = %name, "integrations.power.buttons: unknown button (logout comes from the desktop backend)");
+                if name != "logout" {
+                    tracing::warn!(button = %name, "integrations.power.buttons: unknown button");
+                }
                 continue;
             };
             let answer: String = manager.call(can, &()).await.unwrap_or_else(|_| "na".into());

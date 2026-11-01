@@ -9,13 +9,17 @@ authors.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+deskhand-common.workspace = true
 deskhand-core.workspace = true
 deskhand-linux.workspace = true
 futures-util.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+wayland-client.workspace = true
+wayland-protocols-plasma.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]

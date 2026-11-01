@@ -157,7 +157,7 @@ homeassistant/media_player/deskhand_<node>/config   only when compat is enabled
   power.buttons = ["lock","suspend","hibernate","reboot","poweroff"]   # "logout" opt-in
   active_window.publish_title = true;  media.compat_mqtt_media_player = false; media.ignore_players
   audio.mic_ignore_apps; camera.ignore_processes; metrics.interval/disks/…; systemd.units = [..]
-  dark_mode.light/dark; bluetooth.devices = "paired"|[MACs]; kde_shortcuts.invoke = [{component,action,name}]
+  dark_mode.light/dark; bluetooth.devices = "paired"|[MACs]; shortcuts.invoke = [{component,action,name,id}]
 [[shortcut]] id, name, default_keys        # custom global shortcut → HA event entity
 [[script]]   id, name, command = [argv], timeout, shell = false   # → HA button
 [[sensor]]   id, name, command, interval, unit, device_class, state_class, kind, json_attributes
@@ -201,7 +201,7 @@ Unknown keys produce warnings (via `serde_ignored`), not errors.
   - Night light: running sensor, temperature, inhibit switch, plus a manual switch on Plasma 6.9+.
   - `accent_colour`, `dark_mode` switch.
   - Per-display `brightness_<x>` numbers (including DDC).
-  - `screens_off` / `screens_on` buttons.
+  - `screens_on` switch (KWin DPMS protocol; `screens_off` button as the fallback).
   - `shortcut_<id>` events, and buttons that invoke allowlisted KDE shortcuts.
 - **Notifications:**
   - `notify` entity.
@@ -247,7 +247,7 @@ Unknown keys produce warnings (via `serde_ignored`), not errors.
 | Idle (Wayland) | `ext_idle_notifier_v1` (v2 `get_input_idle_notification`, so playing video doesn't count as activity), 1 s timeout + `idle_since` clock, on a dedicated thread | ScreenSaver `GetSessionIdleTime` polling (X11), then logind IdleHint |
 | Custom global shortcuts | kglobalaccel D-Bus `doRegister` + `setShortcutKeys` (IsDefault, then SetPresent) + `globalShortcutPressed`. No consent dialog; shows in System Settings. **Pad every key sequence to 4 ints**: a shorter array aborts KWin | XDG GlobalShortcuts portal (needs `host.portal.Registry.Register` and a .desktop file). Will be the GNOME path |
 | Active window | Embedded KWin script → `loadScript` + `/Scripting/Script<id>.run` → `callDBus` back to us with one JSON string. **Check that the sender is the owner of org.kde.KWin**. Reload when KWin restarts | Unavailable on X11 in V1 |
-| DPMS | Off: invoke PowerDevil's "Turn Off Screen" shortcut. On: `kscreen-doctor --dpms on` (needs the session's Wayland env). Two buttons; `org_kde_kwin_dpms` may allow reading the state (untested) | `kscreen-doctor --dpms off` |
+| DPMS | `org_kde_kwin_dpms_manager` Wayland protocol: reports each output's mode (also when input wakes it) and sets it, so one `screens_on` switch (checked in M11) | Invoke PowerDevil's "Turn Off Screen" shortcut (`screens_off` button) |
 | Plasma DnD | Read `Inhibited` (covers user DnD and app inhibitions). Write `plasmanotifyrc [DoNotDisturb] Until` with a KConfig change notification (on = far future, off = delete; also ends a user-set DnD) | `Inhibit`/`UnInhibit` (released if we die; cannot end a user DnD) |
 | Night light | `inhibit`/`uninhibit`. `activateManual` only if introspection shows it | Inhibit only |
 | Dark mode / accent | Read: portal `org.freedesktop.appearance`. Write: `plasma-apply-colorscheme` | `plasma-apply-lookandfeel` |
@@ -718,13 +718,60 @@ Dependency order:
     `sudo loginctl unlock-sessions` unlocks (polkit refuses it from ssh without sudo).
 
 ### M11: KDE desktop part 2
-- [ ] kglobalaccel custom shortcuts → events; invoke-allowlist buttons. Use a **fixed component
+- [x] kglobalaccel custom shortcuts → events; invoke-allowlist buttons. Use a **fixed component
       name `"deskhand"`, not `APP_ID`**, so renaming the app id never orphans the user's key bindings.
       **Encode each key sequence as exactly four ints** (unit-tested); a short array aborts KWin
       (spikes §3)
-- [ ] ScreenBrightness dynamic numbers; DPMS buttons (or a switch if `org_kde_kwin_dpms` reports
+- [x] ScreenBrightness dynamic numbers; DPMS buttons (or a switch if `org_kde_kwin_dpms` reports
       the state); Plasma logout; opt-in output enable/disable
 - **Accept:** a shortcut fires an HA automation and appears in System Settings; brightness works.
+- **Status:** done, checked in the VM (Plasma 6.6.6) against the dev HA:
+  - A real Meta+Shift+F12 press (QEMU `sendkey`) fired `event.…_toggle_lights`, and an HA
+    automation on it ran. System Settings → Shortcuts lists "Deskhand" under System Services
+    with "Toggle lights", default Meta+Shift+F12. The spike's leftover `probe` action was removed
+    on start.
+  - Brightness: HA 40 % set PowerDevil's `display0` to 4000/10000, and a change made over D-Bus
+    (7500) showed as 75 % in HA. QEMU's monitor shows up as a display ("QEMU Monitor").
+  - DPMS: the spike probe (`examples/dpms_probe.rs`) showed that the protocol reports and sets
+    the mode, so it is a switch. HA's switch turned the screen off and on, a key press woke it and
+    HA followed, and screens PowerDevil blanked after idle showed as off.
+  - HA's Overview button (invoke allowlist) opened KWin's Overview; HA's logout button ended the
+    session. Disabling the VM's only output from HA was refused.
+  - 19 new tests: key encoding (5, including the byte layout of `a(ai)`), shortcuts (3),
+    brightness (3), DPMS (2), logout (1), outputs (3, with a fake `kscreen-doctor`), `[[shortcut]]`
+    config (2). New mocks: `MockKGlobalAccel` (rejects key sequences that are not four ints),
+    `MockScreenBrightness`, `MockShutdown`.
+- **Caught by the mocks:** a `[&str; 4]` action id serialises as the struct `(ssss)`, not `as`;
+  it must be a `Vec`/slice.
+- **Notes and deviations:**
+  - Capabilities and entities:
+    - `shortcuts` (`shortcuts.kglobalaccel`): `shortcut_<id>` events (`pressed`) for
+      `[[shortcut]]` (`id`, `name`, `default_keys` as a string or list, chords separated by
+      `", "`; parsed in `deskhand-common`, keys checked at config load), and
+      `kde_shortcut_<id>` buttons for `[integrations.shortcuts] invoke = [{component, action,
+      name?, id?}]` (id defaults to the slugified action). The plan's `kde_shortcuts.invoke`
+      became `shortcuts.invoke` (one capability). Actions of the `deskhand` component that are not
+      in the config are unregistered **before** registering, because a stale action can hold the
+      keys a new one wants.
+    - `brightness` (`brightness.powerdevil`, `org.kde.ScreenBrightness`, Plasma 6.2+):
+      `brightness_<label>` (0–100 % slider; id from the display label, ` 2` for duplicates,
+      since PowerDevil's `display<N>` names depend on detection order), attributes `display`,
+      `internal`. Sets with `SetBrightness(value, SuppressIndicator)`.
+    - `dpms` (`dpms.kwin` on its own Wayland thread; fallback `dpms.powerdevil`): `screens_on`
+      switch (HA name "Screens"; on while any output is on; attribute `outputs` with each
+      output's mode), or a `screens_off` button.
+    - `logout` (`logout.plasma`): `logout` button through `org.kde.Shutdown.logout` (no prompt),
+      only when `"logout"` is in `[integrations.power] buttons`.
+    - `outputs` (`outputs.kscreen`, opt-in with `[integrations.outputs] enabled = true`):
+      `output_<name>` switches through `kscreen-doctor output.<id>.enable|disable`, read with
+      `kscreen-doctor -j` every 10 s and after commands. The last enabled output is never
+      disabled.
+  - The binary passes `KdeSettings` (shortcuts, invoke list, logout, outputs opt-in) to
+    `deskhand_kde::candidates`, because a probe cannot read the config.
+  - kglobalaccel keeps a binding the user (or an earlier run) saved, even an empty one, over the
+    default keys. If the default keys are taken when a shortcut is first registered, it stays
+    unbound until the user binds it (warned in the log).
+  - `just vm-ssh` now quotes its arguments; before, `just vm-ssh 'a; b'` ran `b` on the host.
 
 ### Follow-ups from the KDE host (V1, do after M11)
 - [ ] **Per-app volume for players that ignore MPRIS volume.** Chromium-based browsers (Brave,
@@ -835,6 +882,7 @@ Dependency order:
 | 2026-11-01 | M13 (part) | Base Home Manager module pulled forward: `homeManagerModules.default` (`enable`, `package`, `settings`, `passwordFile`), a stub-based `checks.hm-module`, checked with real Home Manager in the VM. Also fixed a clippy lint that only the newer stable toolchain in CI reports (M8 push was red) |
 | 2026-11-01 | M10 | KDE crate: active window via a KWin script (sender-checked callback, caption/fullscreen tracking, reload on KWin restart), virtual desktop select, night light with inhibit switch, Plasma DnD (plasmanotifyrc + KConfig notify, `Inhibit` fallback), colour scheme writer; portal `appearance` (dark mode, accent colour) in linux. All checked in the VM. Fixed: tools not found under NixOS user units' minimal PATH; KWin's desktops property has a different wire type than introspected. 12 new tests, `MockKWin`, `MockPortal` |
 | 2026-11-01 | Host fixes | From the user's KDE host: (1) D-Bus re-reads waited for a quiet gap that never came on busy services (NetworkManager scanning, BlueZ, some players), so `wifi_ssid` and media entities froze; settling is now capped. (2) Bluetooth power-on failed with "Failed" after Plasma turned Bluetooth off: Plasma soft-blocks it with rfkill; Deskhand now lifts the block through `/dev/rfkill` first. (3) Chromium-based players' fixed MPRIS volume is treated as absent. (4) VLC owns two MPRIS names and showed up twice; `X` and `X.instance<N>` of one process are merged. Per-app volume added as a V1 follow-up |
+| 2026-11-01 | M11 | KDE crate: kglobalaccel custom shortcuts (`[[shortcut]]` → `shortcut_<id>` events, four-int key encoding, stale actions removed first) and allowlisted invoke buttons, PowerDevil per-display brightness, DPMS `screens_on` switch over KWin's Wayland protocol (new spike probe) with a PowerDevil fallback button, opt-in logout and output switches. All checked in the VM, including a real key press driving an HA automation and the entry in System Settings. 19 new tests and three Plasma mocks; the kglobalaccel mock caught a `(ssss)`-instead-of-`as` action id. `just vm-ssh` quoting fixed |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

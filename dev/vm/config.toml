@@ -19,3 +19,19 @@ units = ["deskhand-test.service"]
 # Also publish the HACS mqtt_media_player entity (M8 acceptance).
 [integrations.media]
 compat_mqtt_media_player = true
+
+# M11: a custom global shortcut (Meta+Shift+F12 → event shortcut_lights), a button
+# for KWin's Overview, the opt-in logout button and output switches.
+[[shortcut]]
+id = "lights"
+name = "Toggle lights"
+default_keys = "Meta+Shift+F12"
+
+[integrations.shortcuts]
+invoke = [{ component = "kwin", action = "Overview", name = "Overview" }]
+
+[integrations.power]
+buttons = ["suspend", "reboot", "poweroff", "logout"]
+
+[integrations.outputs]
+enabled = true

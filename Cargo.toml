@@ -67,6 +67,7 @@ sd-notify = "0.5"
 sysinfo = "0.40.1"
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
+wayland-protocols-plasma = { version = "0.3.12", features = ["client"] }
 inotify = "0.11.5"
 libpulse-binding = "2.30.1"
 # Safe kill(2) of a script's process group (the workspace denies unsafe code)

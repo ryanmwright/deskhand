@@ -14,7 +14,7 @@ session there.
 | 2 | KWin script callback + sender check | **works** |
 | 3 | kglobalaccel register / press / persist | **works**, but a malformed call crashes KWin (see below) |
 | 4 | Plasma Do Not Disturb | **works**, with a better write path than planned |
-| 5 | DPMS off / on | **works** |
+| 5 | DPMS off / on | **works** (read and set through the Wayland protocol, M11) |
 | 6 | libpulse mic filters | **works** (corked streams not exercised) |
 | 7 | Camera `/proc` scan + inotify | **works** |
 | 8 | logind session from a user service | **works**, but use `User.Display` first |
@@ -95,8 +95,12 @@ session there.
 - `kscreen-doctor --dpms off` / `--dpms on` both work, but only with the session's Wayland
   environment: under plain ssh `kscreen-doctor` aborts. A user service is fine.
 - Any key press also turns the screen back on.
-- Reading the state was not tried. `org_kde_kwin_dpms_manager` v1 is advertised and reports a
-  per-output mode, which could make a real `screens_on` switch in M11 instead of two buttons.
+- **Wayland protocol (M11, `dpms_probe`):** `org_kde_kwin_dpms_manager` v1 →
+  `get(wl_output)` sends `supported`, `mode` (0 on, 1 standby, 2 suspend, 3 off) and `done` per
+  output. `set(3)` turned the output off ("Display output is not active"), `set(0)` turned it
+  back on, and the mode stays after the client exits. A key press while off sent `mode 0`, and
+  idle blanking by PowerDevil showed as `mode 3`. So M11 has a `screens_on` switch, with the
+  shortcut as the fallback.
 
 ## 6. Microphone (`mic_probe`)
 

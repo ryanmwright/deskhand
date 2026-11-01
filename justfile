@@ -62,7 +62,7 @@ vm-headless:
 
 # ssh into the VM (or run a command there)
 vm-ssh *ARGS:
-    dev/vm/ssh.sh {{ARGS}}
+    dev/vm/ssh.sh {{ if ARGS == "" { "" } else { quote(ARGS) } }}
 
 # Rebuild deskhand on the host and restart it in the VM
 vm-deploy:

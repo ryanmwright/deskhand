@@ -7,29 +7,71 @@
 //! - [`dnd`]: Plasma's Do Not Disturb.
 //! - [`color_scheme`]: switches light/dark for the portal-based `appearance`
 //!   integration in `deskhand-linux`.
+//! - [`shortcuts`]: custom global shortcuts (events) and allowlisted KDE
+//!   shortcuts (buttons) through kglobalaccel; [`keys`] encodes key sequences.
+//! - [`brightness`]: per-display brightness through PowerDevil.
+//! - [`dpms`]: screens on/off.
+//! - [`logout`]: Plasma logout button (opt-in).
+//! - [`outputs`]: output enable/disable switches (opt-in).
 //!
 //! Every candidate probes as unavailable outside a Plasma session
 //! (`XDG_CURRENT_DESKTOP` without `KDE`).
 
 pub mod active_window;
+pub mod brightness;
 pub mod color_scheme;
 pub mod desktops;
 pub mod dnd;
+pub mod dpms;
+pub mod keys;
+pub mod logout;
 pub mod night_light;
+pub mod outputs;
+pub mod shortcuts;
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use deskhand_common::shortcuts::Shortcut;
 use deskhand_core::{Integration, Probe};
 use deskhand_linux::LinuxEnv;
 use deskhand_linux::appearance::Appearance;
 
 pub const KWIN: &str = "org.kde.KWin";
 
+/// What the KDE integrations need from the config, collected by the binary.
+#[derive(Debug, Clone, Default)]
+pub struct KdeSettings {
+    /// `[[shortcut]]` entries.
+    pub shortcuts: Vec<Shortcut>,
+    /// `[integrations.shortcuts] invoke`.
+    pub invoke: Vec<shortcuts::InvokeConfig>,
+    /// `"logout"` is in `[integrations.power] buttons`.
+    pub logout: bool,
+    /// `[integrations.outputs] enabled = true`.
+    pub outputs: bool,
+}
+
+/// Checks the `default_keys` of `[[shortcut]]` entries.
+pub fn check_shortcut_keys(shortcuts: &[Shortcut]) -> Result<(), String> {
+    for s in shortcuts {
+        keys::parse_all(&s.default_keys)
+            .map_err(|e| format!("[[shortcut]] {:?}: default_keys {e}", s.id))?;
+    }
+    Ok(())
+}
+
 /// The KDE integrations, in priority order per capability. List them
 /// before the generic Linux ones so they win where both provide a
 /// capability (`appearance`).
-pub fn candidates(env: &Arc<LinuxEnv>) -> Vec<Box<dyn Integration>> {
+pub fn candidates(env: &Arc<LinuxEnv>, settings: KdeSettings) -> Vec<Box<dyn Integration>> {
+    let shortcuts = shortcuts::Shortcuts::new(env.clone(), settings.shortcuts, settings.invoke)
+        .unwrap_or_else(|e| {
+            // The binary checks the keys first (check_shortcut_keys).
+            tracing::warn!("{e}; global shortcuts disabled");
+            shortcuts::Shortcuts::new(env.clone(), Vec::new(), Vec::new())
+                .expect("no keys to parse")
+        });
     vec![
         Box::new(active_window::ActiveWindow::new(env.clone())),
         Box::new(desktops::VirtualDesktops::new(env.clone())),
@@ -40,6 +82,12 @@ pub fn candidates(env: &Arc<LinuxEnv>) -> Vec<Box<dyn Integration>> {
             "appearance.kde",
             Arc::new(color_scheme::KdeColorScheme::default()),
         )),
+        Box::new(shortcuts),
+        Box::new(brightness::Brightness::new(env.clone())),
+        Box::new(dpms::DpmsKwin::new(env.clone())),
+        Box::new(dpms::DpmsPowerDevil::new(env.clone())),
+        Box::new(logout::Logout::new(env.clone(), settings.logout)),
+        Box::new(outputs::Outputs::new(env.clone(), settings.outputs)),
     ]
 }
 
@@ -103,7 +151,16 @@ fn is_executable(p: &std::path::Path) -> bool {
 /// Runs a KDE command-line tool (argv, no shell) with a timeout.
 pub(crate) async fn run_tool(program: &str, args: &[&str]) -> Result<(), String> {
     let path = find_tool(program).ok_or_else(|| format!("{program} not found"))?;
-    let mut cmd = tokio::process::Command::new(&path);
+    tool_output(&path, args).await.map(drop)
+}
+
+/// Runs `path` (argv, no shell) with a timeout; its stdout on success.
+pub(crate) async fn tool_output(path: &std::path::Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let program = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let mut cmd = tokio::process::Command::new(path);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
@@ -112,7 +169,7 @@ pub(crate) async fn run_tool(program: &str, args: &[&str]) -> Result<(), String>
         .map_err(|_| format!("{program} timed out"))?
         .map_err(|e| format!("cannot run {}: {e}", path.display()))?;
     if out.status.success() {
-        Ok(())
+        Ok(out.stdout)
     } else {
         Err(format!(
             "{program} failed ({}): {}",
