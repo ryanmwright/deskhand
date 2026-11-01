@@ -76,6 +76,7 @@ impl Setup {
             Box::new(self.sensors.clone()),
             Box::new(deskhand_common::Metrics::new()),
             Box::new(deskhand_common::SessionState::new()),
+            Box::new(deskhand_common::InCall::new()),
         ];
         #[cfg(feature = "linux")]
         {

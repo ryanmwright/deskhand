@@ -5,7 +5,10 @@
 //! NetworkManager, portal settings, PulseAudio/PipeWire audio, camera and
 //! Wayland idle detection.
 
+#[cfg(feature = "audio-pulse")]
+pub mod audio;
 pub mod bluetooth;
+pub mod camera;
 pub mod env;
 pub mod gamemode;
 pub mod identity;
@@ -53,5 +56,8 @@ pub fn candidates(
         Box::new(gamemode::GameMode::new(env.clone())),
         Box::new(mpris::MediaMpris::new(env.clone())),
         Box::new(notifications::Notifications::new(env.clone())),
+        #[cfg(feature = "audio-pulse")]
+        Box::new(audio::AudioPulse::new()),
+        Box::new(camera::Camera::new()),
     ]
 }

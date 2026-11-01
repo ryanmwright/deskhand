@@ -375,6 +375,36 @@ async fn select_options_update_keeps_the_command_stream() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn state_is_resent_after_options_change() {
+    let (hub, mut t, _) = setup();
+    let c = live(&hub, &mut t, "a").await;
+    let (sel, _cmds) = c.select(EntitySpec::select(id("a_sel"), "Sel", vec!["x".into()]));
+    sel.set("x");
+    sleep(Duration::from_secs(2)).await;
+    t.drain().await;
+
+    // A new option and the state that uses it, at once: HA sees the state
+    // before the new options and rejects it, so it is resent afterwards.
+    sel.set_options(vec!["x".into(), "y".into()]);
+    sel.set("y");
+    sleep(Duration::from_secs(5)).await;
+    let evs = t.drain().await;
+    let order: Vec<String> = evs
+        .iter()
+        .filter_map(|e| match e {
+            HubEvent::Discovery { .. } => Some("discovery".to_owned()),
+            HubEvent::State { state, .. } => Some(format!("{state:?}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["Text(\"y\")", "discovery", "Text(\"y\")"]);
+
+    // Once only.
+    sleep(Duration::from_secs(5)).await;
+    assert!(states(&t.drain().await).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
 async fn json_commands_are_routed_and_listed() {
     let (hub, mut t, _) = setup();
     let c = live(&hub, &mut t, "notifications").await;

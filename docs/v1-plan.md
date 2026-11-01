@@ -608,13 +608,49 @@ Dependency order:
     `dev/vm/media/`.
 
 ### M9: Audio, camera, in-call
-- [ ] libpulse mainloop thread with subscriptions; AudioKit (volume, mute, device selects, mic,
+- [x] libpulse mainloop thread with subscriptions; AudioKit (volume, mute, device selects, mic,
       mic_in_use, headphones)
-- [ ] Camera inotify + `/proc` scan (250 ms settle); `in_call` derived sensor; `audio-pulse`
+- [x] Camera inotify + `/proc` scan (250 ms settle); `in_call` derived sensor; `audio-pulse`
       feature gating. On the host, check camera use through PipeWire (spikes §7) and corked mic
       streams (§6)
 - **Accept:** volume stays in sync both ways; switching output works; a browser call sets
   mic_in_use, camera_in_use and in_call, with app names.
+- **Status:** done in the VM (PipeWire 1.6 pulse server, virtual null sinks and a virtual
+  source); **the browser call is still to be checked on the KDE host**, together with camera
+  use through PipeWire and a muted (corked) mic stream:
+  - Volume and mute changed with `pactl` showed up in HA, and HA's volume, mute, mic volume and
+    output select changed the sound server (the default sink moved to the chosen device).
+  - A device added while running and made default showed up in `audio_output`.
+  - `parecord` from the virtual mic set `mic_in_use` (`apps: ["parecord"]`); a process
+    holding `/dev/video0` set `camera_in_use` (`apps: ["sleep"]`); `in_call` turned on at once
+    from the camera and its `microphone` attribute after 10 s. Recording a monitor source did
+    not count. Everything went off after the processes stopped.
+  - 7 new tests: AudioKit (2, fake source), `in_call` timing (paused time), camera (2, fake
+    `/dev` and `/proc` with real inotify), headphone detection, and a hub test for the fix below.
+- **Fixed on the way (core hub):** a select's state that used a brand-new option was published
+  before the debounced discovery update, so HA rejected it ("Invalid option") and the hub's
+  dedupe never sent it again (`audio_output` stayed unknown in HA). Entities whose spec changes
+  now get their state resent one debounce interval after the discovery update. This also
+  covered the M7 power-profile select and the M8 media player select.
+- **Notes and deviations:**
+  - Capabilities and entities:
+    - `audio` (`audio.pulse`, feature `audio-pulse`): `audio_volume` (HA name "Volume") and
+      `audio_mute` for the default output, `audio_output`/`audio_input` selects (device
+      descriptions, ` 2` for duplicates; monitor sources are not inputs), `mic_volume`,
+      `mic_mute`, `mic_in_use` (attribute `apps`), `headphones_connected` (active port name
+      contains headphone/headset, or `device.form_factor` is headphone/headset).
+      `mic_ignore_apps` extends a built-in list of volume meters (pavucontrol, plasma-pa,
+      kmix, GNOME's volume control), matched on application name, id or binary.
+    - `camera` (`camera.proc`): `camera_in_use` with `apps` (process names) and `devices`;
+      `ignore_processes` option. `/dev` is watched for hotplugged cameras.
+    - `in_call` (deskhand-common): microphone in use for 10 s (released after 5 s) or camera
+      in use; attributes `microphone` and `camera`.
+  - The pulse thread uses the standard mainloop with 50 ms iterations (commands are checked
+    between them), re-reads server info, sinks, sources and source outputs after events, and
+    never autospawns a server. Volume changes keep the channel balance (`ChannelVolumes::scale`).
+    Volume above 100 % is shown as is; HA's slider stops at 100.
+  - `AudioKit` follows the same pattern as `MediaKit`: an `AudioSource` trait with
+    `next_change` and `command`, so other OS backends get the same entity ids.
 
 ### M10: KDE desktop part 1
 - [ ] KWin script integration (active window, fullscreen, display count, reload on KWin restart);
@@ -694,6 +730,7 @@ Dependency order:
 | 2026-11-01 | M6 | LinuxEnv (`User.Display` session); lock (logind/ScreenSaver, unlock gate), power (Can*-gated buttons, delay inhibitor + PrepareSleep/Sleep/Resume, power_event, lid/dock, sleep_inhibited), keep_awake, idle (Wayland v2 thread, ScreenSaver poll, logind), `session_state`. 12 new mock/unit tests and a sleep/resume broker test. Fixed: transport never sent offline/DISCONNECT on sleep; flaky uninstall broker test (CI red on the M5 push). VM checks passed except resume: the QEMU guest never wakes, so resume is covered by the broker test and still needs a check on the real host |
 | 2026-11-01 | M7 | UPower battery/AC/dynamic peripheral batteries, power-profile select, NetworkManager connectivity and SSID, BlueZ adapter and dynamic device switches, systemd user-unit switches (allowlist), GameMode; mocks for all six services and 9 tests. systemd and power profile checked in the VM; Bluetooth needs a check on the KDE host (no adapter here). Signal matching uses the service's unique name, with a restart when the owner changes |
 | 2026-11-01 | M8 | Notifications (notify entity, rich JSON with tag/actions/inline reply/dismiss, `notification_event`) and media (`MediaSource` + `MediaKit` in common, MPRIS multiplexer, art from file/data URLs, HACS `mqtt_media_player` compat renderer with per-field diffing). Checked in the VM: a notification action fired an HA automation, the inline reply arrived, and HA controlled mpv's play/pause, volume and seek, including through the compat player. 13 new tests, `MockMpris`/`MockNotifications`, `TestRig` moved to core. Fixed: notifications held up the startup barrier while plasmashell started. New `dev/vm/click.sh` (QMP) and `dev/ha/api.sh` |
+| 2026-11-01 | M9 | AudioKit (common) + libpulse thread (volume, mute, device selects, mic, `mic_in_use` with apps, headphones), camera (inotify trigger, 250 ms settle, `/proc` scan, hotplug), `in_call` derived sensor. Checked in the VM with virtual devices: volume sync both ways, output switching, mic/camera/in_call with app names. Fixed a hub bug: a select state using a new option was rejected by HA and never resent. 7 new tests. Browser call, PipeWire camera use and corked mic still to check on the KDE host |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

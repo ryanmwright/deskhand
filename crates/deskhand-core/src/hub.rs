@@ -213,6 +213,10 @@ struct EntityEntry {
     pending: bool,
     /// Set when the last handle was dropped.
     remove_at: Option<Instant>,
+    /// The spec changed: resend the state after the next discovery update,
+    /// because HA may have rejected it under the old spec (a select option
+    /// that was not in the list yet).
+    resend: bool,
 }
 
 impl EntityEntry {
@@ -250,6 +254,8 @@ pub struct Hub {
     released: bool,
     barrier_deadline: Instant,
     discovery_deadline: Option<Instant>,
+    /// When to resend the states of entities whose spec changed.
+    resend_deadline: Option<Instant>,
     connected: bool,
     paused: bool,
 }
@@ -302,6 +308,7 @@ impl Hub {
             released: false,
             barrier_deadline,
             discovery_deadline: None,
+            resend_deadline: None,
             connected: false,
             paused: false,
         };
@@ -360,6 +367,7 @@ impl Hub {
             consider(Some(self.barrier_deadline));
         }
         consider(self.discovery_deadline);
+        consider(self.resend_deadline);
         for e in self.entities.values() {
             consider(e.remove_at);
             consider(e.throttle_deadline());
@@ -399,6 +407,31 @@ impl Hub {
                     entities: self.descriptors(),
                     json_commands: self.json.keys().cloned().collect(),
                 });
+                if self.entities.values().any(|e| e.resend) {
+                    self.resend_deadline = Some(now + self.opts.discovery_debounce);
+                }
+            }
+        }
+
+        if self.resend_deadline.is_some_and(|t| t <= now) {
+            self.resend_deadline = None;
+            let live = self.live();
+            let mut resend = Vec::new();
+            for (id, e) in &mut self.entities {
+                if std::mem::take(&mut e.resend)
+                    && let Some(state) = &e.state
+                {
+                    resend.push(HubEvent::State {
+                        id: id.clone(),
+                        state: state.clone(),
+                        retain: e.spec.retain,
+                    });
+                }
+            }
+            if live {
+                for ev in resend {
+                    self.emit(ev);
+                }
             }
         }
     }
@@ -639,6 +672,7 @@ impl Hub {
                 }
                 e.generation = generation;
                 if spec_changed {
+                    e.resend = true;
                     self.mark_discovery_dirty(now);
                 }
             }
@@ -655,6 +689,7 @@ impl Hub {
                         last_sent: None,
                         pending: false,
                         remove_at: None,
+                        resend: false,
                     },
                 );
                 self.mark_discovery_dirty(now);

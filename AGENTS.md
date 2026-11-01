@@ -96,4 +96,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: **M9 (Audio, camera, in-call)**; read `docs/dev/spikes.md` §6–7 first. Pending on the KDE host: resume from suspend (M6) and a Bluetooth device switch (M7).
+Next step: **M10 (KDE desktop part 1)**; read `docs/dev/spikes.md` §2 and §4 first. Pending on the KDE host: resume from suspend (M6), a Bluetooth device switch (M7), and a browser call with camera and a muted mic (M9).
