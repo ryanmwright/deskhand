@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::transport::MAX_PACKET_SIZE;
+
 /// The `[mqtt]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -202,6 +204,31 @@ impl MqttConfig {
             }
         };
         Ok(Arc::new(config))
+    }
+}
+
+impl MqttConfig {
+    /// Connection options shared by the transport and the admin client
+    /// (clean session, 4 MiB packets, credentials, TLS). No last will.
+    pub(crate) fn mqtt_options(
+        &self,
+        client_id: String,
+        password: Option<String>,
+        tls: Option<Arc<rustls::ClientConfig>>,
+    ) -> rumqttc::MqttOptions {
+        let mut o = rumqttc::MqttOptions::new(client_id, &self.host, self.effective_port());
+        o.set_keep_alive(self.keepalive)
+            .set_clean_session(true)
+            .set_max_packet_size(MAX_PACKET_SIZE, MAX_PACKET_SIZE);
+        if let Some(user) = &self.username {
+            o.set_credentials(user, password.unwrap_or_default());
+        }
+        if let Some(tls) = tls {
+            o.set_transport(rumqttc::Transport::tls_with_config(
+                rumqttc::TlsConfiguration::Rustls(tls),
+            ));
+        }
+        o
     }
 }
 

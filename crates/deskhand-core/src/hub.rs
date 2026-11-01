@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -127,6 +127,7 @@ pub struct HubHandle {
     tx: mpsc::UnboundedSender<HubMsg>,
     watches: Watches,
     lifecycle: broadcast::Sender<Lifecycle>,
+    released: watch::Receiver<bool>,
 }
 
 impl HubHandle {
@@ -185,6 +186,14 @@ impl HubHandle {
     pub fn lifecycle(&self) -> broadcast::Receiver<Lifecycle> {
         self.lifecycle.subscribe()
     }
+
+    /// Resolves once the startup barrier has released (every started
+    /// integration is ready, or the timeout passed). Used for systemd's
+    /// `READY=1`. Also resolves if the hub stops first.
+    pub async fn wait_released(&self) {
+        let mut rx = self.released.clone();
+        let _ = rx.wait_for(|r| *r).await;
+    }
 }
 
 struct EntityEntry {
@@ -224,6 +233,7 @@ pub struct Hub {
     to_transport: mpsc::UnboundedSender<HubEvent>,
     watches: Watches,
     lifecycle: broadcast::Sender<Lifecycle>,
+    released_tx: watch::Sender<bool>,
 
     entities: BTreeMap<EntityId, EntityEntry>,
     json: BTreeMap<EntityId, JsonEntry>,
@@ -262,10 +272,12 @@ impl Hub {
         let (to_hub, transport_rx) = mpsc::unbounded_channel();
         let watches: Watches = Arc::new(Mutex::new(HashMap::new()));
         let (lifecycle, _) = broadcast::channel(16);
+        let (released_tx, released) = watch::channel(false);
         let handle = HubHandle {
             tx,
             watches: watches.clone(),
             lifecycle: lifecycle.clone(),
+            released,
         };
         let barrier_deadline = Instant::now() + opts.max_startup;
         let hub = Self {
@@ -275,6 +287,7 @@ impl Hub {
             to_transport,
             watches,
             lifecycle,
+            released_tx,
             entities: BTreeMap::new(),
             json: BTreeMap::new(),
             availability: BTreeMap::new(),
@@ -400,6 +413,7 @@ impl Hub {
                 );
             }
             self.released = true;
+            self.released_tx.send_replace(true);
             self.discovery_deadline = None;
             if self.connected && !self.paused {
                 self.emit(HubEvent::Snapshot(self.snapshot()));

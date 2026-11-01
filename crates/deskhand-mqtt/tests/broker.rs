@@ -12,7 +12,7 @@ use deskhand_core::entity::ImageSource;
 use deskhand_core::{
     Ctx, DeviceInfo, EntityId, EntitySpec, Hub, HubHandle, HubOptions, IntegrationConfig, Transport,
 };
-use deskhand_mqtt::{MqttConfig, MqttTimings, MqttTransport, Topics};
+use deskhand_mqtt::{AdminClient, MqttConfig, MqttTimings, MqttTransport, Topics};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::Value;
 use testcontainers::core::{IntoContainerPort, WaitFor};
@@ -520,4 +520,71 @@ async fn large_payloads_get_through() {
     let m = obs.wait_for(&t.state(&id("media_art")), |_| true).await;
     assert_eq!(m.payload.len(), big.len());
     d.shutdown().await;
+}
+
+#[tokio::test]
+async fn admin_reads_and_clears_everything_retained() {
+    require_it!();
+    let (_broker, port) = broker().await;
+    let t = topics();
+    let config = MqttConfig {
+        host: "127.0.0.1".into(),
+        port: Some(port),
+        ..MqttConfig::default()
+    };
+
+    let d = Daemon::start(port, &[]);
+    let cpu = d.ctx.sensor(EntitySpec::sensor(id("cpu_percent"), "CPU"));
+    cpu.set(1);
+    cpu.set_attributes(serde_json::Map::from_iter([("k".into(), "v".into())]));
+    d.ready();
+    let mut obs = Observer::connect(port, &t.state(&id("cpu_percent"))).await;
+    obs.wait_for(&t.state(&id("cpu_percent")), |_| true).await;
+    // Something of another node must survive.
+    obs.publish("deskhand/othernode/status", "online", true)
+        .await;
+
+    // While the daemon runs, the admin client sees it online.
+    let mut admin = AdminClient::connect(&config, NODE, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let filters = admin.owned_filters();
+    let retained = admin
+        .read_retained(&filters, Duration::from_millis(500), Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(retained[&t.status()], "online");
+    assert!(retained.contains_key(&t.device_config()));
+    assert!(retained.contains_key(&t.attributes(&id("cpu_percent"))));
+    admin.disconnect().await;
+    d.shutdown().await;
+
+    let mut admin = AdminClient::connect(&config, NODE, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let retained = admin
+        .read_retained(&filters, Duration::from_millis(500), Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(retained[&t.status()], "offline");
+    let topics: Vec<String> = retained.keys().cloned().collect();
+    admin.clear(&topics, Duration::from_secs(5)).await.unwrap();
+    admin.disconnect().await;
+
+    let mut after = AdminClient::connect(&config, NODE, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let left = after
+        .read_retained(
+            &["#".to_owned()],
+            Duration::from_millis(500),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        left.keys().cloned().collect::<Vec<_>>(),
+        vec!["deskhand/othernode/status".to_owned()]
+    );
+    after.disconnect().await;
 }

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 concurrency:
@@ -53,6 +54,44 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check all
+
+  # A glibc binary for deploying to a desktop by hand (docs/dev/deploy-to-host.md).
+  # Built on the oldest supported Ubuntu so it runs on older glibc versions too.
+  release-binary:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libpulse-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p deskhand
+      - name: Package
+        id: package
+        run: |
+          name="deskhand-${GITHUB_REF_NAME//\//-}-$(uname -m)-linux-gnu"
+          mkdir -p "dist/$name"
+          cp target/release/deskhand LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          "dist/$name/deskhand" --version
+          echo "glibc symbols needed: $(objdump -T target/release/deskhand | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          retention-days: 30
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --notes ""
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --clobber
 
   nix:
     runs-on: ubuntu-latest

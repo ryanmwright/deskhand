@@ -665,6 +665,9 @@ dependencies = [
  "ksni",
  "mdns-sd",
  "sd-notify",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -677,8 +680,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "deskhand-core",
+ "humantime-serde",
+ "rustix",
+ "serde",
+ "serde_json",
  "sysinfo",
+ "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

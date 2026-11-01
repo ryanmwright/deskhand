@@ -26,7 +26,7 @@ deskhand-kde = { path = "crates/deskhand-kde", version = "0.1.0" }
 deskhand-testkit = { path = "crates/deskhand-testkit", version = "0.1.0" }
 
 # Runtime
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "signal", "time", "process", "fs", "sync", "net"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "signal", "time", "process", "fs", "sync", "net", "io-util"] }
 tokio-util = "0.7.20"
 async-trait = "0.1.92"
 bytes = "1.12"
@@ -67,6 +67,8 @@ wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 inotify = "0.11.5"
 libpulse-binding = "2.30.1"
+# Safe kill(2) of a script's process group (the workspace denies unsafe code)
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
 # Testing
 insta = { version = "1.49", features = ["json", "redactions"] }

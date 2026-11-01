@@ -231,7 +231,7 @@ Unknown keys produce warnings (via `serde_ignored`), not errors.
   directories 6.
 - **Logging and errors:** tracing / tracing-subscriber, thiserror 2 (libraries), anyhow (binary).
 - **CLI and setup:** clap 4.6, inquire 0.9, mdns-sd 0.21, ksni 0.3.7.
-- **Platform:** sysinfo 0.40, wayland-client 0.31 + wayland-protocols 0.32 (staging), inotify 0.11,
+- **Platform:** sysinfo 0.40 (also GPUs), rustix 1.1 (process-group kill), wayland-client 0.31 + wayland-protocols 0.32 (staging), inotify 0.11,
   libpulse-binding 2.30, sha2, sd-notify.
 - **Tests:** insta, testcontainers 0.28 (GenericImage), tempfile, assert_cmd.
 - **Avoided:** bluer and mpris (they pull in libdbus), pipewire (bindgen), notify-rust, bollard,
@@ -341,17 +341,58 @@ Dependency order:
     other D-Bus details come in M6.
 
 ### M3: CLI, doctor, common integrations, CI artifacts
-- [ ] `run | doctor [--json] | print-discovery | uninstall`; tracing (journald-friendly); sd-notify
-- [ ] Scripts (argv, timeout, last-run attributes); command sensors; sysinfo metrics + GPU; uptime;
+- [x] `run | doctor [--json] | print-discovery | uninstall`; tracing (journald-friendly); sd-notify
+- [x] Scripts (argv, timeout, last-run attributes); command sensors; sysinfo metrics + GPU; uptime;
       derived-sensor scaffolding
-- [ ] CI job builds a release binary on ubuntu-22.04 and uploads it as an artifact.
+- [x] CI job builds a release binary on ubuntu-22.04 and uploads it as an artifact.
       `docs/dev/deploy-to-host.md` (copy the binary, run `deskhand doctor`)
 - **Accept:** a script button runs from HA; metrics update; `uninstall` leaves no retained topics.
+- **Status:** done, checked against the dev HA:
+  - Pressing the script button through HA's REST API ran the command, and the result sensor
+    showed `success` with exit code 0.
+  - Metrics and command sensors update on their intervals.
+  - `uninstall` refused while the daemon was online. After stopping it, `uninstall` removed all
+    retained messages, HA deleted the device, and `mosquitto_sub --retained-only` found nothing.
+  - 104 tests: 6 CLI, 21 common, 50 core, 1 linux, 17 MQTT unit, and 9 broker tests that run
+    with `just it` (including a new uninstall test).
+- **Notes and deviations:**
+  - Capabilities: `scripts` (`[[script]]`), `command_sensors` (`[[sensor]]`), `metrics`. Each
+    script is a button `script_<id>` plus a diagnostic enum sensor `script_<id>_result`
+    (running/success/failed/timeout; attributes `last_started`, `duration_s`, `exit_code`). A
+    press while the script runs is ignored. Script output is logged at debug level only, never
+    published.
+  - Commands run with stdin closed, in their own process group (killed as a group on timeout or
+    shutdown, through `rustix`, since the workspace denies `unsafe`), with output capped at
+    64 KiB. `command` is an argv array, or a string with `shell = true`.
+  - Command sensors: trimmed stdout is the state; `kind = "binary_sensor"` parses on/off;
+    `json_attributes = true` takes `state` from a JSON object and the other keys as attributes.
+    Failure makes the state unknown and logs once per failure streak.
+  - **GPU uses sysinfo 0.40's own `Gpus`** (AMD/Intel sysfs, NVIDIA through NVML, Vulkan
+    fallback) instead of hand-written sysfs and `nvidia-smi` parsing. `Gpus` is not `Send`, so
+    metrics are sampled on a dedicated thread that stops when the integration's run ends.
+  - "Uptime" is a `boot_time` timestamp sensor, so HA shows a relative time and nothing ticks.
+  - Metrics register only the entities the first sample could read (no temperature entity on a
+    VM, no GPU entity without a GPU). Network rates skip loopback, container, bridge and VPN
+    interfaces unless `network_interfaces` lists some.
+  - `HubHandle::wait_released()` drives systemd `READY=1` (after the startup barrier, even if the
+    broker is down). `STOPPING=1` on shutdown. No watchdog yet.
+  - Logs go to stderr. Under journald (`JOURNAL_STREAM`) each line has a `<N>` syslog priority
+    prefix, so `journalctl -p warning` works.
+  - `doctor` exits 1 when the config is invalid, the broker is unreachable, or an integration
+    with `enabled = true` has no provider. It reads our retained status and discovery document
+    to say whether a daemon is online and how many entities are published.
+  - `uninstall` uses a separate admin client id with no last will. It refuses while our status
+    is `online` unless `--force`; `--dry-run` lists the topics; it asks for confirmation unless
+    `--yes`. It clears the discovery document first.
+  - Release artifacts: `deskhand-<ref>-x86_64-linux-gnu.tar.gz` plus `.sha256` per push; `v*`
+    tags also attach them to a draft GitHub release.
+  - Fixed `dev/ha/bootstrap.sh` re-runs: HA returns 404 for `/api/onboarding` once onboarding is
+    finished, so the script now waits on `/api/` and treats 404 as done.
 
 ### M4: Plasma VM and D-Bus testkit
-- [ ] **Prerequisite: disk.** The Plasma closure, Rust targets and HA image need about 40 GB, and
-      46 GB is free. Ask the user to **grow this VM's disk by about 60 GB** before starting, then
-      run `nix-collect-garbage -d` once.
+- [ ] **Prerequisite: disk.** The Plasma closure, Rust targets and HA image need about 40 GB.
+      The user grew the disk on 2026-11-01 (256 GB, 95 GB free). Still to do: run
+      `nix-collect-garbage -d` once (ask first; it deletes old Nix generations).
 - [ ] `nixosConfigurations.plasma-vm` + `apps.plasma-vm`: Plasma 6 Wayland, SDDM autologin,
       4 GB RAM, 4 vCPU, virtio-gpu, host broker at 10.0.2.2, workspace shared over 9p, runs a
       deskhand user service from the shared build. Nested KVM is available here
@@ -466,6 +507,7 @@ Dependency order:
 | 2026-10-31 | M0 | Flake devShell, 7-crate workspace, CI workflow, cargo-deny, dev HA + Mosquitto stack (`just dev-up`, verified discovery and ACL). Findings: sysinfo 0.40 needs Rust 1.95, so `rust-version` was raised. rumqttc 0.25.1 pulls rustls-webpki 0.102 (advisories), but only for an error type; ignored in deny.toml with reasons. The HA MQTT config flow needs `protocol` and `other_settings`. CI passed on the first push |
 | 2026-11-01 | M1 | Core model, hub, supervisor, config and identity in `deskhand-core`; `FakeTransport` behind a `test-util` feature, re-exported by the testkit. 50 tests on paused time, stable over 30 runs. Deviations recorded under M1 |
 | 2026-11-01 | M2 | MQTT transport (device discovery, stale cleanup, birth, LWT, reconnect, pause, sleep), `deskhand run` with a version/start-time integration, Linux file-based identity, `just run` and `dev/ha/states.sh`. Bug found by an integration test: an aborted transport left its poll task holding the connection (no LWT); fixed |
+| 2026-11-01 | M3 | `doctor [--json]`, `print-discovery [--all]`, `uninstall` (admin MQTT client), journald priorities, sd-notify READY/STOPPING via `HubHandle::wait_released`. Scripts, command sensors, sysinfo metrics (GPU via sysinfo, sampled on its own thread because `Gpus` is not `Send`), `boot_time`, derived-sensor helpers (`Inputs`, `Debounced`). CI `release-binary` job on ubuntu-22.04 and `docs/dev/deploy-to-host.md`. Acceptance checked against the dev HA. Fixed `bootstrap.sh` re-runs. User grew the disk (95 GB free) for M4 |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

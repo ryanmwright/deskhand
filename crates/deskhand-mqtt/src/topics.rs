@@ -88,6 +88,15 @@ impl Topics {
         )
     }
 
+    /// Discovery topic of the compat `media_player` entity (HACS `mqtt_media_player`).
+    pub fn media_player_config(&self) -> String {
+        format!(
+            "{}/media_player/{}/config",
+            self.discovery_prefix,
+            self.device_id()
+        )
+    }
+
     /// HA's birth/will topic.
     pub fn ha_status(&self) -> String {
         format!("{}/status", self.discovery_prefix)

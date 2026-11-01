@@ -89,9 +89,19 @@ async fn barrier_waits_for_ready() {
     hub.startup_complete();
     t.connect();
     assert!(snapshots(&t.drain().await).is_empty());
+    let released = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.wait_released().await }
+    });
+    t.settle().await;
+    assert!(!released.is_finished());
 
     c.ready();
     let evs = t.drain().await;
+    assert!(
+        released.is_finished(),
+        "wait_released resolves with the barrier"
+    );
     let snaps = snapshots(&evs);
     assert_eq!(snaps.len(), 1);
     assert_eq!(entity_ids(snaps[0]), vec!["a_one"]);

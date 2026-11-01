@@ -66,6 +66,7 @@ Everything runs inside the flake devShell: `nix develop` (or prefix commands wit
 | `just dev-up` | starts Home Assistant (:8123, `dev`/`devpassword`) and Mosquitto (:1883), then onboards HA and adds the MQTT integration |
 | `just dev-down` / `just dev-reset` | stops the stack, or stops it and wipes the HA config |
 | `just run` | runs the daemon against the dev stack (`dev/config.toml`) |
+| `cargo run -p deskhand -- --config dev/config.toml doctor` | checks config, broker and integrations (also `print-discovery`, `uninstall`) |
 | `dev/ha/states.sh [regex]` | prints matching HA entity states (default: `deskhand`) |
 | `just mqtt-watch` | prints all broker traffic |
 | `nix build` | builds the `deskhand` package |
@@ -91,4 +92,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: **M3 (CLI, doctor, common integrations, CI artifacts)**.
+Next step: **M4 (Plasma VM and D-Bus testkit)**. The disk has been grown; ask before running `nix-collect-garbage -d`.

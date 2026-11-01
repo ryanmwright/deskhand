@@ -135,24 +135,15 @@ impl MqttTransport {
             .client_id
             .clone()
             .unwrap_or_else(|| format!("deskhand-{}", self.device.node_id));
-        let mut o = MqttOptions::new(client_id, &self.config.host, self.config.effective_port());
-        o.set_keep_alive(self.config.keepalive)
-            .set_clean_session(true)
-            .set_max_packet_size(MAX_PACKET_SIZE, MAX_PACKET_SIZE)
-            .set_last_will(LastWill::new(
-                self.topics.status(),
-                OFFLINE,
-                QoS::AtLeastOnce,
-                true,
-            ));
-        if let Some(user) = &self.config.username {
-            o.set_credentials(user, self.password.clone().unwrap_or_default());
-        }
-        if let Some(tls) = &self.tls {
-            o.set_transport(rumqttc::Transport::tls_with_config(
-                rumqttc::TlsConfiguration::Rustls(tls.clone()),
-            ));
-        }
+        let mut o = self
+            .config
+            .mqtt_options(client_id, self.password.clone(), self.tls.clone());
+        o.set_last_will(LastWill::new(
+            self.topics.status(),
+            OFFLINE,
+            QoS::AtLeastOnce,
+            true,
+        ));
         o
     }
 }

@@ -9,3 +9,19 @@ log = "info,deskhand_mqtt=debug"
 host = "localhost"
 username = "deskhand"
 password = "deskhand-dev"
+
+[integrations.metrics]
+interval = "10s"
+
+[[script]]
+id = "touch_marker"
+name = "Touch marker"
+command = ["touch", "/tmp/deskhand-dev-marker"]
+timeout = "5s"
+
+[[sensor]]
+id = "dev_random"
+name = "Dev random"
+command = "echo $((RANDOM % 100))"
+shell = true
+interval = "15s"

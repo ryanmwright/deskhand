@@ -12,15 +12,24 @@ TOKEN_FILE="$(dirname "$0")/config/.deskhand-dev-refresh-token"
 
 log() { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 
+# The API answers 401 without a token once HA is up.
+api_up() { [ "$(curl -s -o /dev/null -w '%{http_code}' "$HA/api/" || true)" = 401 ]; }
+
+# HA serves /api/onboarding only until onboarding is finished (404 afterwards).
+step_done() {
+  local body
+  body=$(curl -fsS "$HA/api/onboarding" 2>/dev/null) || return 0
+  [ "$(echo "$body" | jq -r --arg s "$1" '.[] | select(.step==$s) | .done')" = "true" ]
+}
+
 log "waiting for Home Assistant at $HA"
 for _ in $(seq 1 180); do
-  if curl -fsS "$HA/api/onboarding" >/dev/null 2>&1; then break; fi
+  if api_up; then break; fi
   sleep 2
 done
-curl -fsS "$HA/api/onboarding" >/dev/null || { log "HA did not come up"; exit 1; }
+api_up || { log "HA did not come up"; exit 1; }
 
-user_done=$(curl -fsS "$HA/api/onboarding" | jq -r '.[] | select(.step=="user") | .done')
-if [ "$user_done" != "true" ]; then
+if ! step_done user; then
   log "creating owner user '$USER_NAME'"
   auth_code=$(curl -fsS -X POST "$HA/api/onboarding/users" \
     -H 'Content-Type: application/json' \
@@ -38,14 +47,12 @@ ACCESS=$(curl -fsS -X POST "$HA/auth/token" -d grant_type=refresh_token \
 auth=(-H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json')
 
 for step in core_config analytics; do
-  done_=$(curl -fsS "$HA/api/onboarding" | jq -r ".[] | select(.step==\"$step\") | .done")
-  if [ "$done_" != "true" ]; then
+  if ! step_done "$step"; then
     log "onboarding step: $step"
     curl -fsS -X POST "$HA/api/onboarding/$step" "${auth[@]}" -d '{}' >/dev/null
   fi
 done
-done_=$(curl -fsS "$HA/api/onboarding" | jq -r '.[] | select(.step=="integration") | .done')
-if [ "$done_" != "true" ]; then
+if ! step_done integration; then
   log "onboarding step: integration"
   curl -fsS -X POST "$HA/api/onboarding/integration" "${auth[@]}" \
     -d "$(jq -n --arg c "$CLIENT_ID" '{client_id:$c, redirect_uri:($c + "?auth_callback=1")}')" >/dev/null
