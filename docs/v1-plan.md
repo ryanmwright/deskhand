@@ -498,7 +498,7 @@ Dependency order:
       (ObjectManager); GameMode; mocks
 - **Accept:** mock tests pass; on the host, a BT device appears and its switch works, and a
   systemd unit stays in sync.
-- **Status:** done except the Bluetooth hardware check:
+- **Status:** done (Bluetooth checked on the KDE host on 2026-11-01):
   - Mock tests pass for every integration (9 new, including dynamic add/remove for UPower
     peripherals and BlueZ devices).
   - **systemd** was checked in the VM against the real user manager. HA's switch started and
@@ -506,8 +506,8 @@ Dependency order:
     in HA within 3 s.
   - **Power profile:** HA's select set power-profiles-daemon in the VM. The opposite direction
     is covered by the mock test; the VM has no `performance` profile to switch to.
-  - **Bluetooth: not checked on hardware.** This dev host and the VM have no adapter. Check on
-    the KDE host: a paired device appears, and its switch connects and disconnects.
+  - **Bluetooth:** this dev host and the VM have no adapter; the user confirmed on the KDE host
+    that it works (after the rfkill fix in "Host fixes").
 - **Notes and deviations:**
   - Capabilities and entities:
     - `battery` (`battery_level`, `battery_state`, `battery_time_remaining` in min,
@@ -731,7 +731,8 @@ Dependency order:
     with "Toggle lights", default Meta+Shift+F12. The spike's leftover `probe` action was removed
     on start.
   - Brightness: HA 40 % set PowerDevil's `display0` to 4000/10000, and a change made over D-Bus
-    (7500) showed as 75 % in HA. QEMU's monitor shows up as a display ("QEMU Monitor").
+    (7500) showed as 75 % in HA. QEMU's monitor shows up as a display ("QEMU Monitor"). The user
+    confirmed brightness on the KDE host's real monitor.
   - DPMS: the spike probe (`examples/dpms_probe.rs`) showed that the protocol reports and sets
     the mode, so it is a switch. HA's switch turned the screen off and on, a key press woke it and
     HA followed, and screens PowerDevil blanked after idle showed as off.
