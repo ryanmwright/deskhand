@@ -1,0 +1,53 @@
+# cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # rumqttc 0.25.1 (latest) depends on rustls-webpki 0.102 only for an error-type variant
+    # (`TlsError::WebPki`). Certificate verification goes through rustls 0.23, which uses the
+    # patched rustls-webpki 0.103. Remove once rumqttc drops 0.102.
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is unmaintained; pulled in by rumqttc" },
+    # zbus 6 folded zvariant/zbus_names into zbus. We stay on zbus 5 until ksni supports 6
+    # (docs/v1-plan.md §3).
+    { id = "RUSTSEC-2026-0370", reason = "zbus 5 pin until ksni supports zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus 5 pin until ksni supports zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zbus 5 pin until ksni supports zbus 6" },
+]
+
+[licenses]
+version = 2
+# Permissive licences compatible with MIT OR Apache-2.0 distribution.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "0BSD",
+    "Unlicense", # ksni
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

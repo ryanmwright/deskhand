@@ -1,0 +1,17 @@
+[package]
+name = "deskhand-common"
+description = "Platform-neutral Deskhand integrations: scripts, command sensors, metrics, derived sensors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+deskhand-core.workspace = true
+sysinfo.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

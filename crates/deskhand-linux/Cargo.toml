@@ -1,0 +1,25 @@
+[package]
+name = "deskhand-linux"
+description = "Shared freedesktop/Linux integrations for Deskhand (logind, MPRIS, UPower, BlueZ, ...)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["audio-pulse"]
+audio-pulse = ["dep:libpulse-binding"]
+
+[dependencies]
+deskhand-core.workspace = true
+inotify.workspace = true
+libpulse-binding = { workspace = true, optional = true }
+tokio.workspace = true
+tracing.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+zbus.workspace = true
+
+[lints]
+workspace = true

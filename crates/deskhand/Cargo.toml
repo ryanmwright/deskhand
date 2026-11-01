@@ -1,0 +1,39 @@
+[package]
+name = "deskhand"
+description = "Expose your desktop to Home Assistant over MQTT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["kde", "tray", "setup", "audio-pulse"]
+linux = ["dep:deskhand-linux"]
+kde = ["linux", "dep:deskhand-kde"]
+audio-pulse = ["deskhand-linux?/audio-pulse"]
+tray = ["dep:ksni"]
+setup = ["dep:inquire", "dep:mdns-sd"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+deskhand-common.workspace = true
+deskhand-core.workspace = true
+deskhand-kde = { workspace = true, optional = true }
+deskhand-linux = { workspace = true, optional = true }
+deskhand-mqtt.workspace = true
+directories.workspace = true
+inquire = { workspace = true, optional = true }
+ksni = { workspace = true, optional = true }
+mdns-sd = { workspace = true, optional = true }
+sd-notify.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+
+[lints]
+workspace = true

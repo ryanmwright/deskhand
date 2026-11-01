@@ -1,0 +1,450 @@
+# Deskhand V1: implementation plan
+
+> **How this plan is executed.** This document is the source of truth for V1. Each milestone
+> (M0–M14) is sized for **one Claude Code session**. At the start of a session, read AGENTS.md and
+> this file, pick the first unchecked milestone, and tick its boxes as you go. At the end, add a line
+> to the Session log (§9). If something turns out different from the plan (especially in M5,
+> the spikes), edit this plan in the same commit.
+
+## Context
+
+kiot (davidedmundson/kiot) exposes a KDE desktop to Home Assistant over MQTT. It's C++/Qt,
+KDE-only, pre-alpha, and its config is edited by hand. Deskhand gives the same automation surface
+(idle, lock, power, media, notifications and so on) with a platform-neutral Rust core. Backends are
+selected at compile time: KDE first, then GNOME, macOS and Windows. It should be easy to set up:
+a wizard finds the broker, entities appear in HA through discovery, and nothing needs installing on
+the HA side.
+
+**Decisions made with the user:**
+- **Transport:** MQTT with HA discovery, kept behind a transport boundary. A native zeroconf HA
+  integration is post-V1.
+- **Media:** stock HA entities by default. A flag also enables the HACS `mqtt_media_player` format.
+- **Setup:** `deskhand setup` wizard, `deskhand doctor`, and a ksni tray icon (status and Pause).
+- **Packaging (V1):** Nix flake (devShell, package, home-manager module). CI also attaches a
+  glibc binary so the user can deploy to their own KDE host.
+- **License:** MIT OR Apache-2.0, written from scratch with no kiot (LGPL) code.
+- **Repo:** git with GitHub Actions.
+- **Features:** read-only and automation-oriented. No "launch app" or "open URL" features.
+  User-configured scripts are the only way HA can run commands.
+- **Dev target:** this host runs XFCE (VM, nested KVM, 46 GB free). KDE work happens in a
+  reproducible **Nix Plasma 6 Wayland VM** (`nix run .#plasma-vm`). The user may also deploy CI
+  builds to a real KDE host.
+
+## 1. Architecture
+
+### Workspace (supersedes the layout in AGENTS.md; update AGENTS.md in M0)
+```
+crates/
+  deskhand-core/     entity model, Ctx + typed handles, Hub actor, Integration/Transport traits,
+                     supervisor, config framework, identity. No rumqttc, no zbus.
+  deskhand-mqtt/     Transport impl: rumqttc, topics, HA device discovery, birth/LWT, stale cleanup,
+                     compat media_player
+  deskhand-common/   platform-neutral: scripts, command sensors, metrics (sysinfo), derived sensors
+                     (session_state, in_call), domain kits (MediaKit/AudioKit/PowerKit) so entity
+                     ids are identical on every OS
+  deskhand-linux/    freedesktop, reused by the future GNOME backend: logind, ScreenSaver,
+                     Notifications, MPRIS, UPower, power-profiles, BlueZ, systemd1, NetworkManager,
+                     portal Settings, libpulse audio, camera, ext-idle-notify, GameMode
+  deskhand-kde/      KWin script, virtual desktops, NightLight, Plasma DnD, ScreenBrightness,
+                     kglobalaccel, DPMS, logout, colour scheme
+  deskhand-testkit/  dev-only: FakeTransport, TestBus (private dbus-daemon), mock D-Bus services,
+                     mosquitto container
+  deskhand/          binary: clap CLI, wiring, features, setup wizard, doctor, tray
+```
+- **Features** on `deskhand`: `default = ["kde","tray","setup","audio-pulse"]`,
+  `kde = ["linux", …]`. Later: `gnome`, `macos`, `windows`.
+- **Runtime selection.**
+  - Each backend returns candidate integrations grouped by capability, in priority order.
+    Example for `idle`: wayland ext-idle-notify, then ScreenSaver polling, then logind IdleHint.
+  - The supervisor probes the candidates and starts the first available one per capability.
+  - KDE candidates are offered only when `XDG_CURRENT_DESKTOP` contains `KDE`.
+  - Nothing assumes a capability exists.
+
+### Core API (one trait plus typed handles, chosen over per-capability traits)
+```rust
+#[async_trait] pub trait Integration: Send + 'static {
+    fn id(&self) -> &'static str;          // "audio.pulse"
+    fn capability(&self) -> &'static str;  // "audio" (provider group)
+    fn description(&self) -> &'static str; // shown by doctor
+    async fn probe(&self) -> Probe;        // Available{detail} | Unavailable{reason}
+    async fn run(self: Box<Self>, ctx: Ctx) -> Result<(), IntegrationError>;
+}
+```
+**Entity model:**
+- `EntitySpec { id, name, kind: EntityKind, icon, category, enabled_by_default, availability: Integration|Always, retain }`.
+- `EntityKind` = Sensor{device_class,state_class,unit,precision,options} | BinarySensor | Switch |
+  Button | Number{min,max,step,unit,mode} | Select{options} | Text | Event{event_types} | Notify |
+  Lock | Image{Url|Bytes} | Update | MediaPlayer (compat only).
+- Device classes are `#[non_exhaustive]` enums with a `Custom(String)` variant.
+
+**`Ctx` API:**
+- Typed handles: `ctx.sensor(spec) -> Sensor` (`.set()`, `.set_attributes()`),
+  `ctx.switch(spec) -> (Switch, Commands<bool>)`, `button -> Commands<()>`, `number`, `select`
+  (`set_options` triggers re-discovery), `text`, `event` (`.fire(type, attrs)`), `notify`, `lock`,
+  `image`.
+- Other methods: `json_command(id)`, `observe(id)` (a watch receiver, used by derived sensors),
+  `set_available`, `ready()`, `config::<T>()`, `cancelled()`.
+- Dropping the last handle unregisters the entity, after a **30 s grace period** so restarts don't
+  churn HA.
+
+**Hub actor:**
+- Single task fed by an mpsc channel.
+- Owns the registry, last states, availability and the pause flag.
+- Dedupes unchanged states and throttles per entity.
+- **Startup barrier:** waits for every integration to call `ready()`, or 5 s.
+- Debounces discovery changes by 1 s.
+
+**Supervisor:** runs probes, restarts failed integrations with backoff (1 s → 60 s), re-probes
+every 5 min and immediately on resume, and records status for `doctor`.
+
+**Transport boundary:** `Transport::run(link)`.
+- Hub → transport: Snapshot, Discovery, State, Attributes, Event, Availability, Pause,
+  Sleep/Resume, Shutdown.
+- Transport → hub: Connected, Disconnected, Command, HaOnline.
+
+**Identity:**
+- `node_id` = the first 12 hex characters of `sha256("deskhand\0"+machine_id+"\0"+user)`, which is
+  stable across hostname changes and unique per user. It can be overridden.
+- The device name defaults to `PrettyHostname`, then the hostname.
+- The MAC goes into device `connections`, so HA Wake-on-LAN can use it (`publish_mac` toggle).
+
+### MQTT and HA discovery
+**Device-based discovery** at `homeassistant/device/deskhand_<node>/config` (HA 2024.11+): one
+retained, atomic document. The retained copy also serves as the record of what was published, so
+there is no state file.
+
+**Topics:**
+```
+deskhand/<node>/status                 global availability; LWT "offline"; retained
+deskhand/<node>/status/<capability>    per-integration availability; retained
+deskhand/<node>/<entity>/state|attributes   retained (except events)
+deskhand/<node>/<entity>/set           commands; never retained
+deskhand/<node>/notifications/send     rich JSON notifications
+homeassistant/media_player/deskhand_<node>/config   only when compat is enabled
+```
+
+**Connection lifecycle:**
+1. **Connect.** Use rumqttc 3.1.1 with rustls+ring, keepalive 30 s and LWT. **Set max packet
+   size to 4 MiB in both directions**; the 10 KiB default silently breaks discovery and album art.
+2. **On ConnAck, clean up stale entities:**
+   1. Read our retained device config (1.5 s timeout).
+   2. Send `{"p":…}` removal stubs for entities of disabled integrations and for dynamic entities
+      gone past the grace period.
+   3. For integrations that are enabled but not available right now, keep their components and
+      mark them offline.
+   4. Publish the full config.
+   5. Subscribe to commands and `homeassistant/status`.
+   6. Publish all states.
+3. **Ignore retained messages on command topics.** A stale "poweroff" must never fire on connect.
+4. **HA restart:** on `homeassistant/status=online`, wait a random 0–5 s, then resend discovery
+   and all states.
+5. **Reconnect** with jittered backoff (1–30 s), then resend a full snapshot. Drop queued stale
+   states.
+6. **Pause** (from the tray) publishes offline and ignores commands. **SIGTERM** publishes
+   `session_state=off` and offline.
+7. **Suspend:** a logind delay inhibitor runs this on PrepareForSleep(true): publish
+   `session_state=sleeping`, publish offline, disconnect cleanly, release the inhibitor. On wake,
+   rebuild the connection immediately and resync.
+
+### Config (`~/.config/deskhand/config.toml`, mode 0600)
+```toml
+[device]   name = "…"; publish_mac = true            # node_id override optional
+[mqtt]     host = "homeassistant.local"; port = 1883; username = "deskhand"
+           password_file = "…"   # | password | password_command = [..]; tls, ca_file optional
+           discovery_prefix = "homeassistant"; topic_prefix = "deskhand"
+[general]  tray = true; idle_threshold = "5m"; log = "info"
+[integrations.<capability>]  enabled = "auto" | true | false   # + per-integration options:
+  lock.allow_remote_unlock = false     # false → Lock button + locked sensor instead of HA lock entity
+  power.buttons = ["lock","suspend","hibernate","reboot","poweroff"]   # "logout" opt-in
+  active_window.publish_title = true;  media.compat_mqtt_media_player = false; media.ignore_players
+  audio.mic_ignore_apps; camera.ignore_processes; metrics.interval/disks/…; systemd.units = [..]
+  dark_mode.light/dark; bluetooth.devices = "paired"|[MACs]; kde_shortcuts.invoke = [{component,action,name}]
+[[shortcut]] id, name, default_keys        # custom global shortcut → HA event entity
+[[script]]   id, name, command = [argv], timeout, shell = false   # → HA button
+[[sensor]]   id, name, command, interval, unit, device_class, state_class, kind, json_attributes
+```
+Unknown keys produce warnings (via `serde_ignored`), not errors.
+
+## 2. V1 entity catalogue
+
+- **Session (beyond kiot):**
+  - `session_state` enum: active / idle / locked / sleeping / off.
+  - `user_active` and `idle_seconds`.
+  - `screen_locked`, plus a lock entity or a lock button (depending on `allow_remote_unlock`).
+  - `keep_awake` switch (logind and ScreenSaver inhibitors).
+  - `sleep_inhibited` (attribute lists who is inhibiting).
+  - `lid_closed`, `docked`.
+  - `power_event` event: sleep / resume.
+- **Power:**
+  - Buttons, published only if logind `Can*` allows them.
+  - `on_ac_power`.
+  - Battery: %, state, time remaining.
+  - **Peripheral batteries** (mouse, keyboard, headset), as dynamic entities.
+  - `power_profile` select.
+- **Media:**
+  - `media_state` sensor (attributes: title, artist, album, player, duration, position).
+  - Play-pause, next, previous and stop buttons.
+  - `media_volume` number.
+  - `media_player` select (auto or a specific player).
+  - `media_art` image.
+  - Optional compat `media_player` entity (with seek).
+- **Audio:**
+  - Volume, mute, output and input device selects.
+  - Mic volume, `mic_mute`, `mic_in_use` (attribute lists apps).
+  - `headphones_connected`.
+  - **`in_call`** (derived: mic in use by a real app for at least 10 s, or camera in use).
+- **Camera:** `camera_in_use` (attributes: apps, devices). It is detected by scanning
+  `/proc/*/fd`, with inotify only as the trigger, so it doesn't flicker on device probes.
+- **KDE desktop:**
+  - `active_window` (app_id, title, pid), `fullscreen`, `display_count`.
+  - `virtual_desktop` select.
+  - `dnd` switch.
+  - Night light: running sensor, temperature, inhibit switch, plus a manual switch on Plasma 6.9+.
+  - `accent_colour`, `dark_mode` switch.
+  - Per-display `brightness_<x>` numbers (including DDC).
+  - `screens_off` / `screens_on` buttons.
+  - `shortcut_<id>` events, and buttons that invoke allowlisted KDE shortcuts.
+- **Notifications:**
+  - `notify` entity.
+  - A rich JSON topic (`title`, `message`, `icon`, `urgency`, `timeout`, `tag` → replaces,
+    `actions`, inline `reply`).
+  - A `notification` event entity (`action` / `reply` / `closed`). This lets HA send "Doorbell —
+    [Unlock] [Ignore]" and react to the click.
+- **Connectivity:**
+  - `bluetooth_power` switch, per-device connect switches (with battery attribute).
+  - `wifi_ssid` (signal attribute), `network_connectivity`.
+- **System:**
+  - systemd user-unit switches (allowlist only).
+  - Metrics: CPU, load, RAM, swap, disk, CPU temperature, network rx/tx, boot time, GPU on AMD
+    sysfs or nvidia-smi.
+  - `gamemode_active`.
+  - A diagnostic "connected" sensor.
+- **Scripts and custom sensors:** kiot parity.
+
+## 3. Crates (checked 2026-10-31)
+
+- **Runtime:** tokio 1.54, tokio-util (CancellationToken), async-trait.
+- **MQTT:** rumqttc 0.25 (`use-rustls-no-provider`) + rustls 0.23/ring.
+- **D-Bus:** **zbus 5.19** (tokio feature).
+  - Stay on 5.x, not 6.x: ksni 0.3.7 and ashpd still require zbus 5.
+  - Migrating to 6 is a later one-session task.
+- **Config and paths:** serde, serde_json, toml 1.1, serde_ignored, humantime-serde,
+  directories 6.
+- **Logging and errors:** tracing / tracing-subscriber, thiserror 2 (libraries), anyhow (binary).
+- **CLI and setup:** clap 4.6, inquire 0.9, mdns-sd 0.21, ksni 0.3.7.
+- **Platform:** sysinfo 0.40, wayland-client 0.31 + wayland-protocols 0.32 (staging), inotify 0.11,
+  libpulse-binding 2.30, sha2, sd-notify.
+- **Tests:** insta, testcontainers 0.28 (GenericImage), tempfile, assert_cmd.
+- **Avoided:** bluer and mpris (they pull in libdbus), pipewire (bindgen), notify-rust, bollard,
+  aws-lc.
+- **C dependencies:** libpulse is the only runtime one, behind the `audio-pulse` feature. dbus-daemon
+  is needed for tests only.
+- **Toolchain:** edition 2024, rust-version 1.95 (required by sysinfo 0.40), from nixpkgs (no overlay).
+
+## 4. Risky integration points (validated in M5)
+
+| Area | Primary | Fallback |
+|---|---|---|
+| Idle (Wayland) | `ext_idle_notifier_v1` (v2 `get_input_idle_notification`, so playing video doesn't count as activity), 1 s timeout + `idle_since` clock, on a dedicated thread | ScreenSaver `GetSessionIdleTime` polling (X11), then logind IdleHint |
+| Custom global shortcuts | kglobalaccel D-Bus `doRegister` + `setShortcutKeys` + `globalShortcutPressed`. No consent dialog; shows in System Settings | XDG GlobalShortcuts portal (needs `host.portal.Registry.Register` and a .desktop file). Will be the GNOME path |
+| Active window | Embedded KWin script → `loadScript`/`run` → `callDBus` back to us. **Check that the sender is the owner of org.kde.KWin**. Reload when KWin restarts | Unavailable on X11 in V1 |
+| DPMS | Off: invoke PowerDevil's "Turn Off Screen" shortcut. On: `kscreen-doctor --dpms on`. Two buttons (state can't be read) | `kscreen-doctor --dpms off` |
+| Plasma DnD | Read `Inhibited`; write with Plasma's `Inhibit`/`UnInhibit` (the cookie is released if we die) | Clear `plasmanotifyrc [DoNotDisturb]` |
+| Night light | `inhibit`/`uninhibit`. `activateManual` only if introspection shows it | Inhibit only |
+| Dark mode / accent | Read: portal `org.freedesktop.appearance`. Write: `plasma-apply-colorscheme` | `plasma-apply-lookandfeel` |
+| Mic in use | libpulse source-outputs, excluding monitors, corked streams and ignore-listed apps | Native PipeWire (post-V1) |
+| Camera | inotify trigger + `/proc/*/fd` scan with ignore list | Open/close counting |
+| Lock | logind `LockedHint` on the resolved session; Lock/Unlock (unlock gated) | ScreenSaver `GetActive`/`ActiveChanged` |
+
+## 5. Testing strategy
+- **Hub unit tests:** use `FakeTransport` and paused tokio time. Cover dedupe, barrier, debounce,
+  grace period, pause and availability.
+- **Snapshot tests (insta):** discovery JSON for every EntityKind, the compat media_player
+  payload, and stale-cleanup diffs.
+- **MQTT integration tests (`DESKHAND_IT=1`):** run against a mosquitto container
+  (testcontainers; podman socket documented in the devShell). Cover LWT, retained discovery,
+  stale removal, birth republish, retained-command rejection, broker restart and 1 MiB payloads.
+- **D-Bus tests:** the testkit `TestBus` starts private session and system dbus-daemons, and
+  `#[zbus::interface]` mocks stand in for logind, ScreenSaver, Notifications, MPRIS, UPower,
+  PowerProfiles, BlueZ, systemd1, NightLight, VirtualDesktopManager, ScreenBrightness,
+  KGlobalAccel and KWin Scripting.
+- **CLI tests (assert_cmd):** `doctor --json`, `print-discovery`, config errors.
+- **Manual E2E:** `compose.yaml` runs mosquitto (passwd + ACL) and a pinned HA image. A bootstrap
+  script completes onboarding and adds the MQTT integration through the REST API.
+- **Plasma VM:** `nix run .#plasma-vm`. `checks.kde-e2e` (runNixOSTest) asserts discovery, lock
+  state and notifications; it runs nightly in CI.
+- **CI (GitHub Actions):** fmt, clippy `-D warnings`, test, mqtt-it, cargo-deny, `nix build`,
+  nightly VM. **Release artifacts from M3:** a glibc binary built on ubuntu-22.04, uploaded per
+  push and per tag, for deploying to the user's KDE host.
+
+## 6. Milestones (one session each)
+
+Dependency order:
+- M0 → M1 → M2 → M3 is the core path.
+- M4 → M5 come before M6–M11. M6–M9 can be reordered among themselves; M10 and M11 need M5.
+- M12 needs M3; M13 needs M12; M14 is last.
+
+### M0: Bootstrap
+- [x] `git init`; `.gitignore`, `LICENSE-MIT`, `LICENSE-APACHE`, `rustfmt.toml`, `deny.toml`
+- [x] `flake.nix` devShell: rustc, cargo, clippy, rustfmt, rust-analyzer, pkg-config,
+      libpulseaudio, dbus, mosquitto, cargo-deny, cargo-insta, just. Stub `packages.default`
+- [x] Workspace with all 7 crates as compiling stubs; `[workspace.dependencies]` pinned as in §3
+- [x] `.github/workflows/ci.yml` (fmt, clippy, test, deny, nix build)
+- [x] `compose.yaml`, `dev/mosquitto/*`, `dev/ha/bootstrap.sh`, `justfile` (`dev-up`, `it`, `vm`)
+- [x] Update AGENTS.md: crate layout, zbus-5 pin, dev commands, link to this plan.
+      Define the app-id / D-Bus name constant once
+- **Accept:** `nix develop -c cargo test` passes; `just dev-up` gives HA on :8123 with MQTT
+  configured; CI is green.
+- **Status:** done except "CI is green". The workflow is written, but there is no GitHub remote
+  yet, so it has never run. `APP_ID` is `io.github.ryanmwright.Deskhand`. If the repo moves to
+  an org, change it in `deskhand-core` before V1 ships; it is cheap to change until then.
+
+### M1: Core model and Hub
+- [ ] EntitySpec/EntityKind/State/CommandValue; typed handles (Drop unregisters); Ctx
+- [ ] Integration/Transport/Probe traits; Hub actor; supervisor (priority groups, backoff, re-probe)
+- [ ] Config framework (`enabled = auto|true|false`, raw `[integrations.*]` tables, serde_ignored);
+      identity; testkit FakeTransport
+- **Accept:** about 25 paused-time unit tests pass; clippy is clean.
+
+### M2: MQTT transport
+- [ ] rumqttc setup (TLS, 4 MiB packets, LWT, password_file/command); topic layout
+- [ ] Device-discovery renderer with insta snapshots; command routing (retained rejected)
+- [ ] Birth republish with jitter; stale cleanup; reconnect and resync; `deskhand run` with a demo
+      info integration
+- [ ] testcontainers integration tests
+- **Accept:** the device appears in the compose HA; `kill -9` makes it unavailable within 45 s;
+  a renamed entity is cleaned up after restart; integration tests pass.
+
+### M3: CLI, doctor, common integrations, CI artifacts
+- [ ] `run | doctor [--json] | print-discovery | uninstall`; tracing (journald-friendly); sd-notify
+- [ ] Scripts (argv, timeout, last-run attributes); command sensors; sysinfo metrics + GPU; uptime;
+      derived-sensor scaffolding
+- [ ] CI job builds a release binary on ubuntu-22.04 and uploads it as an artifact.
+      `docs/dev/deploy-to-host.md` (copy the binary, run `deskhand doctor`)
+- **Accept:** a script button runs from HA; metrics update; `uninstall` leaves no retained topics.
+
+### M4: Plasma VM and D-Bus testkit
+- [ ] **Prerequisite: disk.** The Plasma closure, Rust targets and HA image need about 40 GB, and
+      46 GB is free. Ask the user to **grow this VM's disk by about 60 GB** before starting, then
+      run `nix-collect-garbage -d` once.
+- [ ] `nixosConfigurations.plasma-vm` + `apps.plasma-vm`: Plasma 6 Wayland, SDDM autologin,
+      4 GB RAM, 4 vCPU, virtio-gpu, host broker at 10.0.2.2, workspace shared over 9p, runs a
+      deskhand user service from the shared build. Nested KVM is available here
+- [ ] TestBus (private session and system buses); first mocks (logind, ScreenSaver)
+- **Accept:** the VM boots into a Plasma Wayland desktop and `org.kde.KWin` is on its bus; a mock
+  bus test passes in CI.
+
+### M5: KDE risk spikes
+- [ ] `examples/` probes run inside the VM: ext-idle-notify v2 (and its behaviour while video
+      plays), KWin script callback plus sender check, kglobalaccel register/press/persist, Plasma
+      DnD Inhibit semantics, DPMS off/on, libpulse mic filters, camera `/proc` scan, logind
+      `session/auto` from a user service
+- [ ] Record the results in `docs/dev/spikes.md`; **amend §4 and M6–M11 of this plan if anything
+      is blocked**
+- **Accept:** every item is marked works, fallback or blocked.
+
+### M6: Linux session and power
+- [ ] LinuxEnv (session and system connections, desktop detection, hostname1); lock state and
+      control (unlock gate); power buttons via `Can*`
+- [ ] PrepareForSleep delay inhibitor wired through Hub Sleep/Resume to the transport; keep-awake
+- [ ] Idle providers (wayland, screensaver, logind); `session_state`; lid/docked; sleep_inhibited;
+      mock tests
+- **Accept (VM):** locking flips `screen_locked`/`session_state`; suspend shows sleeping and the
+  device is back online within 10 s of resume; 5 min idle flips `user_active`.
+
+### M7: Linux hardware and services
+- [ ] UPower (battery, AC, dynamic peripherals); power-profile select; NetworkManager SSID and
+      connectivity
+- [ ] systemd unit switches (allowlist, Subscribe); BlueZ adapter and dynamic devices
+      (ObjectManager); GameMode; mocks
+- **Accept:** mock tests pass; on the host, a BT device appears and its switch works, and a
+  systemd unit stays in sync.
+
+### M8: Notifications and MPRIS media
+- [ ] notify entity; rich JSON topic; action and reply events; tag → replaces_id
+- [ ] `MediaSource` trait + MediaKit; MPRIS multiplexer (NameOwnerChanged, PropertiesChanged,
+      Seeked); art image; compat media_player renderer and snapshot; mock MPRIS tests
+- **Accept:** clicking a notification action fires an HA automation; HA controls play/pause and
+  volume; the compat media_player works, including seek.
+
+### M9: Audio, camera, in-call
+- [ ] libpulse mainloop thread with subscriptions; AudioKit (volume, mute, device selects, mic,
+      mic_in_use, headphones)
+- [ ] Camera inotify + `/proc` scan; `in_call` derived sensor; `audio-pulse` feature gating
+- **Accept:** volume stays in sync both ways; switching output works; a browser call sets
+  mic_in_use, camera_in_use and in_call, with app names.
+
+### M10: KDE desktop part 1
+- [ ] KWin script integration (active window, fullscreen, display count, reload on KWin restart)
+- [ ] Virtual desktop select; night light; DnD; accent colour and dark mode (portal read in
+      linux, write in kde); mocks
+- **Accept (VM):** entities reflect UI changes within 1 s and HA commands change the desktop.
+
+### M11: KDE desktop part 2
+- [ ] kglobalaccel custom shortcuts → events; invoke-allowlist buttons
+- [ ] ScreenBrightness dynamic numbers; DPMS buttons; Plasma logout; opt-in output enable/disable
+- **Accept:** a shortcut fires an HA automation and appears in System Settings; brightness works.
+
+### M12: Setup wizard and tray
+- [ ] `deskhand setup`: broker discovery in this order: mDNS `_mqtt._tcp`, then
+      `_home-assistant._tcp` host on port 1883, then `homeassistant.local`, then localhost.
+      Credentials and TLS; connection test with readable CONNACK errors; atomic 0600 write
+- [ ] Install, enable and start the systemd user unit (`PartOf`/`After`/`WantedBy=graphical-session.target`,
+      `Type=notify`, `Restart=on-failure`); if the binary is in /nix/store, point to the
+      home-manager module instead
+- [ ] ksni tray (status, Pause, open config, quit; only when a StatusNotifierWatcher exists);
+      polish doctor output
+- **Accept:** setup on a fresh VM user ends with a running service and the device in HA; Pause
+  makes the device unavailable.
+
+### M13: Nix packaging and VM e2e test
+- [ ] `packages.default` (buildRustPackage, libpulse, .desktop file, unit template)
+- [ ] `homeManagerModules.default` (`services.deskhand.{enable,package,settings,passwordFile,tray}`)
+- [ ] `checks.kde-e2e` (runNixOSTest) plus a nightly CI job
+- **Accept:** `nix build` and `nix flake check` pass; the HM module gives a working service with
+  the password outside the store.
+
+### M14: Docs and release
+- [ ] README (features, quick start), `docs/configuration.md`, `docs/entities.md`,
+      `docs/home-assistant.md` (automations: lights off on lock or sleep, meeting light from
+      `in_call`, pause media when locked, notify when a job finishes, shortcut triggers)
+- [ ] `blueprints/` (actionable notification, idle → lights, meeting light); `SECURITY.md`
+      (broker ACL per node, unlock risk, title privacy, command allowlist); `CONTRIBUTING.md`
+      (adding an integration or backend); release workflow
+- **Accept:** a new user can go from README to a working setup using only the docs.
+
+## 7. Security principles (apply throughout)
+- MQTT never carries commands to execute. Scripts, systemd units and KDE shortcuts are allowlisted
+  in config.
+- Retained command messages are ignored.
+- Remote unlock is off by default.
+- Window titles can be withheld (`publish_title = false`).
+- The KWin callback checks the sender.
+- The config is 0600; passwords can come from a file or a command.
+
+## 8. Post-V1 roadmap
+- **Backends:** GNOME (Mutter IdleMonitor, GlobalShortcuts portal, a Shell extension for the
+  active window); macOS (objc2); Windows (`windows` crate); wlroots/Hyprland.
+- **Packaging:** AUR, deb, rpm, Flatpak (portal-only providers), nixpkgs upstream, NixOS module.
+- **Transport:** native HA integration (zeroconf + websocket, no broker); MQTT v5.
+- **Features:** update entity (GitHub releases), screen-share detection, opt-in screenshot image,
+  opt-in notification mirroring to HA, Activities, keyboard layout, per-app volume,
+  Docker/Podman, gamepad, TTS/playmedia, Music Assistant, X11 active window, GUI settings,
+  localisation. Macros and app/game launcher only with a strong use case.
+- **Maintenance:** zbus 6 migration; pure-Rust `pulseaudio` crate if it matures.
+
+## 9. Session log
+| Date | Milestone | Outcome / notes |
+|---|---|---|
+| 2026-10-31 | Planning | Plan approved; decisions recorded in Context |
+| 2026-10-31 | M0 | Flake devShell, 7-crate workspace, CI workflow, cargo-deny, dev HA + Mosquitto stack (`just dev-up`, verified discovery and ACL). Findings: sysinfo 0.40 needs Rust 1.95, so `rust-version` was raised. rumqttc 0.25.1 pulls rustls-webpki 0.102 (advisories), but only for an error type; ignored in deny.toml with reasons. The HA MQTT config flow needs `protocol` and `other_settings`. CI has not run yet (no remote) |
+
+## Verification (whole V1)
+1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.
+2. `just dev-up` starts HA and the broker; `nix run .#plasma-vm` starts deskhand in the VM; the
+   "Deskhand" device in HA shows the §2 entities.
+3. Drive each milestone's acceptance checks in the VM (lock, idle, suspend, notification action,
+   media, shortcut).
+4. `nix flake check` runs the kde-e2e VM test.
+5. Deploy the CI binary to the user's real KDE host and check hardware features: Bluetooth,
+   camera, DDC brightness, suspend.

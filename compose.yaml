@@ -1,0 +1,29 @@
+# Local Home Assistant + Mosquitto for Deskhand development.
+#   just dev-up     start both and configure HA (onboarding + MQTT integration)
+#   just dev-down   stop them
+# HA:     http://localhost:8123  (user: dev / password: devpassword)
+# Broker: localhost:1883         (deskhand / deskhand-dev, homeassistant / homeassistant-dev)
+name: deskhand-dev
+
+services:
+  mosquitto:
+    image: docker.io/library/eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./dev/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro,Z
+      - ./dev/mosquitto/passwd:/mosquitto/config/passwd:ro,Z
+      - ./dev/mosquitto/acl:/mosquitto/config/acl:ro,Z
+    restart: unless-stopped
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.10.4
+    ports:
+      - "8123:8123"
+    volumes:
+      - ./dev/ha/config:/config:Z
+    environment:
+      TZ: UTC
+    depends_on:
+      - mosquitto
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+# Home Assistant sees everything.
+user homeassistant
+topic readwrite #
+
+# Deskhand may only touch its own state topics and HA discovery/birth topics.
+user deskhand
+topic readwrite deskhand/#
+topic readwrite homeassistant/#

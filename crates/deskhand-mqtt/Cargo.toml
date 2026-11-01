@@ -1,0 +1,24 @@
+[package]
+name = "deskhand-mqtt"
+description = "MQTT transport for Deskhand with Home Assistant discovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+deskhand-core.workspace = true
+rumqttc.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

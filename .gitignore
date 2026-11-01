@@ -1,0 +1,11 @@
+/target
+/result
+/result-*
+*.qcow2
+.direnv/
+.env
+dev/ha/config/
+dev/mosquitto/data/
+dev/mosquitto/log/
+*.snap.new
+*.pending-snap
