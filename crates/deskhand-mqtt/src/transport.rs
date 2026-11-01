@@ -173,9 +173,8 @@ async fn poll_loop(
         if tx.is_closed() {
             return;
         }
-        if !*active.borrow_and_update() && active.wait_for(|a| *a).await.is_err() {
-            return;
-        }
+        // `active` only gates *re*connecting (sleep). Requests already queued,
+        // such as the offline status and DISCONNECT sent on sleep, still go out.
         let ev = match eventloop.poll().await {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
                 attempt = 0;
@@ -190,7 +189,15 @@ async fn poll_loop(
                 // We asked to disconnect (sleep or shutdown): drop the socket now.
                 eventloop.clean();
                 eventloop.pending.clear();
-                NetEvent::Disconnected("disconnect requested".into())
+                if tx
+                    .send(NetEvent::Disconnected("disconnect requested".into()))
+                    .is_err()
+                    || !wait_until_active(&mut active).await
+                {
+                    return;
+                }
+                attempt = 0;
+                continue;
             }
             Ok(_) => continue,
             Err(e) => {
@@ -199,14 +206,18 @@ async fn poll_loop(
                 if tx.send(NetEvent::Disconnected(e.to_string())).is_err() {
                     return;
                 }
-                if *active.borrow() {
+                if *active.borrow_and_update() {
                     attempt = attempt.saturating_add(1);
                     let delay = backoff(attempt, timings.reconnect_min, timings.reconnect_max);
                     tracing::debug!(error = %e, retry_in = ?delay, "MQTT connection failed");
                     tokio::select! {
                         () = tokio::time::sleep(delay) => {}
-                        _ = active.changed() => {}
+                        // Sleep or resume: re-evaluate right away (a resume reconnects now).
+                        _ = active.changed() => { attempt = 0; }
                     }
+                }
+                if !wait_until_active(&mut active).await {
+                    return;
                 }
                 continue;
             }
@@ -215,6 +226,11 @@ async fn poll_loop(
             return;
         }
     }
+}
+
+/// Waits while the machine sleeps. False once the transport is gone.
+async fn wait_until_active(active: &mut watch::Receiver<bool>) -> bool {
+    active.wait_for(|a| *a).await.is_ok()
 }
 
 /// `min * 2^(n-1)` capped at `max`, with up to 25% random jitter.

@@ -69,12 +69,22 @@ impl Setup {
 
     /// Every integration compiled in, in priority order per capability.
     pub fn candidates(&self) -> Vec<Box<dyn Integration>> {
-        let list: Vec<Box<dyn Integration>> = vec![
+        #[allow(unused_mut)]
+        let mut list: Vec<Box<dyn Integration>> = vec![
             Box::new(deskhand_common::info::DeskhandInfo::new()),
             Box::new(self.scripts.clone()),
             Box::new(self.sensors.clone()),
             Box::new(deskhand_common::Metrics::new()),
+            Box::new(deskhand_common::SessionState::new()),
         ];
+        #[cfg(feature = "linux")]
+        {
+            let env = deskhand_linux::LinuxEnv::from_env();
+            list.extend(deskhand_linux::candidates(
+                &env,
+                self.general.idle_threshold,
+            ));
+        }
         list
     }
 }

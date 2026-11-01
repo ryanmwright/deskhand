@@ -21,6 +21,8 @@ pub const MANAGER_PATH: &str = "/org/freedesktop/login1";
 pub const SESSION_ID: &str = "1";
 pub const SESSION_PATH: &str = "/org/freedesktop/login1/session/_31";
 pub const SESSION_AUTO_PATH: &str = "/org/freedesktop/login1/session/auto";
+pub const USER_PATH: &str = "/org/freedesktop/login1/user/_1000";
+pub const USER_SELF_PATH: &str = "/org/freedesktop/login1/user/self";
 
 /// An inhibitor lock taken through `Inhibit`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +116,33 @@ impl Manager {
         session_path()
     }
 
+    async fn get_user_by_pid(&self, _pid: u32) -> OwnedObjectPath {
+        OwnedObjectPath::try_from(USER_PATH).expect("valid path")
+    }
+
+    async fn get_user(&self, _uid: u32) -> OwnedObjectPath {
+        OwnedObjectPath::try_from(USER_PATH).expect("valid path")
+    }
+
+    /// `(what, who, why, mode, uid, pid)` of active inhibitors.
+    async fn list_inhibitors(&self) -> Vec<(String, String, String, String, u32, u32)> {
+        lock(&self.state)
+            .inhibitors
+            .iter()
+            .filter(|i| i.active)
+            .map(|i| {
+                (
+                    i.what.clone(),
+                    i.who.clone(),
+                    i.why.clone(),
+                    i.mode.clone(),
+                    1000,
+                    4242,
+                )
+            })
+            .collect()
+    }
+
     async fn list_sessions(&self) -> Vec<(String, u32, String, String, OwnedObjectPath)> {
         vec![(
             SESSION_ID.into(),
@@ -163,7 +192,14 @@ impl Manager {
     }
 
     /// Returns one end of a pipe; the lock is held until the client closes it.
-    async fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> fdo::Result<OwnedFd> {
+    async fn inhibit(
+        &self,
+        what: &str,
+        who: &str,
+        why: &str,
+        mode: &str,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<OwnedFd> {
         let (mut reader, writer) =
             std::io::pipe().map_err(|e| fdo::Error::Failed(e.to_string()))?;
         let index = {
@@ -178,12 +214,16 @@ impl Manager {
             });
             s.inhibitors.len() - 1
         };
+        emit_inhibited_changed(conn.clone()).await;
         // EOF on the read end means every copy of the client's fd is closed.
         let state = self.state.clone();
+        let conn = conn.clone();
+        let runtime = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
             let mut buf = [0u8; 16];
             while matches!(reader.read(&mut buf), Ok(n) if n > 0) {}
             lock(&state).inhibitors[index].active = false;
+            runtime.spawn(emit_inhibited_changed(conn));
         });
         Ok(OwnedFd::from(std::os::fd::OwnedFd::from(writer)))
     }
@@ -235,6 +275,35 @@ impl Manager {
         whats.sort_unstable();
         whats.dedup();
         whats.join(":")
+    }
+}
+
+/// `PropertiesChanged` for `BlockInhibited` and `DelayInhibited`.
+async fn emit_inhibited_changed(conn: zbus::Connection) {
+    if let Ok(m) = conn
+        .object_server()
+        .interface::<_, Manager>(MANAGER_PATH)
+        .await
+    {
+        let manager = m.get().await;
+        let _ = manager.block_inhibited_changed(m.signal_emitter()).await;
+        let _ = manager.delay_inhibited_changed(m.signal_emitter()).await;
+    }
+}
+
+struct User;
+
+#[zbus::interface(name = "org.freedesktop.login1.User")]
+impl User {
+    /// The user's graphical session: what a user service should follow.
+    #[zbus(property)]
+    async fn display(&self) -> (String, OwnedObjectPath) {
+        (SESSION_ID.into(), session_path())
+    }
+
+    #[zbus(property, name = "UID")]
+    async fn uid(&self) -> u32 {
+        1000
     }
 }
 
@@ -338,6 +407,8 @@ impl MockLogind {
                     state: state.clone(),
                 },
             )?
+            .serve_at(USER_PATH, User)?
+            .serve_at(USER_SELF_PATH, User)?
             .serve_at(
                 SESSION_PATH,
                 Session {

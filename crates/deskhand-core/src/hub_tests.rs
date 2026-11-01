@@ -505,10 +505,13 @@ async fn sleep_and_resume_are_forwarded_and_broadcast() {
     let (hub, mut t, _) = setup();
     let c = live(&hub, &mut t, "power").await;
     let mut lifecycle = hub.lifecycle();
+    c.notify_prepare_sleep();
     c.notify_sleep();
     c.notify_resume();
     let evs = t.drain().await;
+    // PrepareSleep stays inside: the transport only hears about the real sleep.
     assert_eq!(evs, vec![HubEvent::Sleep, HubEvent::Resume]);
+    assert_eq!(lifecycle.recv().await.unwrap(), Lifecycle::PrepareSleep);
     assert_eq!(lifecycle.recv().await.unwrap(), Lifecycle::Sleep);
     assert_eq!(lifecycle.recv().await.unwrap(), Lifecycle::Resume);
 }

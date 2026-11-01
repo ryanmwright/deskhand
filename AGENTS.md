@@ -77,7 +77,7 @@ Everything runs inside the flake devShell: `nix develop` (or prefix commands wit
 - On this machine `docker` is podman. The devShell points testcontainers at the podman socket.
 - This dev host runs XFCE, not KDE. KDE features are tested in the Plasma 6 Wayland VM or on the user's real KDE host using CI artifacts (`docs/dev/deploy-to-host.md`).
 - Plasma VM (`nix/plasma-vm.nix`): `just vm` (window) or `just vm-headless` + `just vm-screenshot` (PNG at `/tmp/plasma-vm.png`). The repo is mounted at `/mnt/deskhand`; the `deskhand-dev` user service runs the host's `target/debug/deskhand` with `dev/vm/config.toml` against the host broker (10.0.2.2). `just vm-deploy` rebuilds and restarts it; `just vm-ssh '<cmd>'` runs commands as `dev` (uid 1000). `just vm-reset` deletes the VM disk.
-- Spike probes (`cargo build --examples`, results in `docs/dev/spikes.md`) run in the VM as a user service: `just vm-ssh 'systemd-run --user --wait --pipe /mnt/deskhand/target/debug/examples/<probe>'`. Plain ssh has no Wayland env, and logind's `auto` session is the ssh one. Send input with the QEMU monitor (`sendkey`), not `mouse_move`.
+- Spike probes (`cargo build --examples`, results in `docs/dev/spikes.md`) run in the VM as a user service: `just vm-ssh 'systemd-run --user --wait --pipe /mnt/deskhand/target/debug/examples/<probe>'`. Plain ssh has no Wayland env, and logind's `auto` session is the ssh one. Send input with the QEMU monitor (`sendkey`), not `mouse_move`. The VM can suspend but never resumes (QEMU); recover with `system_reset` in the monitor.
 - D-Bus tests: `deskhand_testkit::TestBus` starts private session and system buses; mocks live in `deskhand_testkit::mocks`. Start tests with `require_dbus!()`.
 
 ## Conventions
@@ -95,4 +95,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: **M6 (Linux session and power)**. M6–M9 may be done in any order; read `docs/dev/spikes.md` first.
+Next step: **M7 (Linux hardware and services)**. M7–M9 may be done in any order; read `docs/dev/spikes.md` first.

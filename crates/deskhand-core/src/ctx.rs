@@ -557,7 +557,17 @@ impl Ctx {
         self.inner.cancel.clone()
     }
 
-    /// Reports that the machine is about to sleep (from the platform's power integration).
+    /// Announces an imminent sleep: integrations get [`Lifecycle::PrepareSleep`]
+    /// and can still publish (for example `session_state=sleeping`). Follow
+    /// with [`Ctx::notify_sleep`] after a short pause.
+    ///
+    /// [`Lifecycle::PrepareSleep`]: crate::hub::Lifecycle::PrepareSleep
+    pub fn notify_prepare_sleep(&self) {
+        let _ = self.inner.hub.send(HubMsg::PrepareSleep);
+    }
+
+    /// Reports that the machine is about to sleep (from the platform's power
+    /// integration): the transport publishes offline and disconnects.
     pub fn notify_sleep(&self) {
         let _ = self.inner.hub.send(HubMsg::Sleep);
     }

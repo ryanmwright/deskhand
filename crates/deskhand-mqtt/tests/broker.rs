@@ -538,8 +538,20 @@ async fn admin_reads_and_clears_everything_retained() {
     cpu.set(1);
     cpu.set_attributes(serde_json::Map::from_iter([("k".into(), "v".into())]));
     d.ready();
-    let mut obs = Observer::connect(port, &t.state(&id("cpu_percent"))).await;
-    obs.wait_for(&t.state(&id("cpu_percent")), |_| true).await;
+    // Wait until both retained topics exist before reading them back.
+    let mut obs = Observer::connect(port, "deskhand/itnode/cpu_percent/#").await;
+    let mut pending = BTreeSet::from([
+        t.state(&id("cpu_percent")),
+        t.attributes(&id("cpu_percent")),
+    ]);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !pending.is_empty() {
+            let m = obs.rx.recv().await.expect("observer stream ended");
+            pending.remove(&m.topic);
+        }
+    })
+    .await
+    .expect("state and attributes published");
     // Something of another node must survive.
     obs.publish("deskhand/othernode/status", "online", true)
         .await;
@@ -587,4 +599,50 @@ async fn admin_reads_and_clears_everything_retained() {
         vec!["deskhand/othernode/status".to_owned()]
     );
     after.disconnect().await;
+}
+
+#[tokio::test]
+async fn sleep_goes_offline_and_resume_reconnects_quickly() {
+    require_it!();
+    let (_broker, port) = broker().await;
+    let t = topics();
+    let mut obs = Observer::connect(port, &t.status()).await;
+    let d = Daemon::start(port, &[]);
+    let state = d
+        .ctx
+        .sensor(EntitySpec::sensor(id("session_state"), "State").always_available());
+    state.set("active");
+    d.ready();
+    obs.wait_for(&t.status(), |m| m.text() == "online").await;
+
+    // What the power integration does on PrepareForSleep(true).
+    state.set("sleeping");
+    d.hub.sleep();
+    obs.wait_for(&t.status(), |m| m.text() == "offline").await;
+    let mut late = Observer::connect(port, &t.state(&id("session_state"))).await;
+    let m = late
+        .wait_for(&t.state(&id("session_state")), |_| true)
+        .await;
+    assert_eq!(
+        m.text(),
+        "sleeping",
+        "the sleeping state is retained before disconnecting"
+    );
+    // Stays offline while asleep (no reconnect attempts).
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        obs.collect(Duration::from_millis(200))
+            .await
+            .iter()
+            .all(|m| m.text() != "online")
+    );
+
+    let woke = std::time::Instant::now();
+    state.set("active");
+    d.hub.resume();
+    obs.wait_for(&t.status(), |m| m.text() == "online").await;
+    let took = woke.elapsed();
+    assert!(took < Duration::from_secs(10), "back online after {took:?}");
+    eprintln!("back online {took:?} after resume");
+    d.shutdown().await;
 }

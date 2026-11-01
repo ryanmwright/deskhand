@@ -725,12 +725,18 @@ dependencies = [
 name = "deskhand-linux"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deskhand-core",
+ "deskhand-testkit",
  "futures-util",
  "inotify",
  "libpulse-binding",
+ "rustix",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "wayland-client",
  "wayland-protocols",

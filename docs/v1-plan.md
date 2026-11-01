@@ -442,14 +442,54 @@ Dependency order:
   - Camera: check apps that use the camera through PipeWire on the real host.
 
 ### M6: Linux session and power
-- [ ] LinuxEnv (session and system connections, desktop detection, hostname1); lock state and
+- [x] LinuxEnv (session and system connections, desktop detection, hostname1); lock state and
       control (unlock gate); power buttons via `Can*`. Session = `User.Display`, fallback
       `GetSession("auto")` (spikes §8)
-- [ ] PrepareForSleep delay inhibitor wired through Hub Sleep/Resume to the transport; keep-awake
-- [ ] Idle providers (wayland, screensaver, logind); `session_state`; lid/docked; sleep_inhibited;
+- [x] PrepareForSleep delay inhibitor wired through Hub Sleep/Resume to the transport; keep-awake
+- [x] Idle providers (wayland, screensaver, logind); `session_state`; lid/docked; sleep_inhibited;
       mock tests
 - **Accept (VM):** locking flips `screen_locked`/`session_state`; suspend shows sleeping and the
   device is back online within 10 s of resume; 5 min idle flips `user_active`.
+- **Status:** done, with one part verified outside the VM:
+  - Locking (loginctl and HA's Lock screen button) flipped `screen_locked` and `session_state`
+    in HA within 3 s.
+  - 5 min without input: `user_active` was still on at 290 s and off at 330 s (`idle_time` 330).
+    `session_state` showed `locked`, because Plasma auto-locks at 5 min and locked wins over idle.
+  - HA's Suspend button put the VM to sleep, and HA showed `sleeping` with the device offline.
+    **The QEMU guest never resumes**, from S3 or s2idle (even with an RTC alarm). So resume was
+    verified with a new broker test (sleep publishes offline and the retained `sleeping`, stays
+    offline, and is back online about 2 ms after resume), plus the mock logind test of the
+    inhibitor sequence. Check a real resume on the KDE host.
+  - Keep awake took a logind `sleep:idle` block inhibitor and a ScreenSaver inhibition, which
+    `sleep_inhibited` reported.
+- **Fixed on the way:** the M2 transport never sent the offline status or DISCONNECT on sleep.
+  The poll task checked `active` before it sent the queued requests. `active` now only gates
+  reconnecting. Found by the new broker test.
+- **Notes and deviations:**
+  - New `Lifecycle::PrepareSleep` (`Ctx::notify_prepare_sleep`). The power integration fires
+    `power_event: sleep`, sends PrepareSleep (so `session_state=sleeping` is published while
+    still connected), waits 300 ms, sends Sleep (offline, disconnect), waits 1.2 s, then releases
+    the delay inhibitor. A `power_event: resume` fired right after waking is usually dropped,
+    because the transport is still reconnecting. Use `session_state` or `connected` in
+    automations.
+  - Capabilities: `lock` (`lock.logind`, `lock.screensaver`), `power` (`power.logind`),
+    `keep_awake`, `idle` (`idle.wayland`, `idle.screensaver`, `idle.logind`), `session_state`
+    (in deskhand-common). Entities: `screen_locked`, `lock_screen` button or `screen_lock` lock
+    (`allow_remote_unlock`), `suspend`/`hibernate`/`hybrid_sleep`/`suspend_then_hibernate`/
+    `reboot`/`power_off` (only if `Can*` is `yes`; `challenge` hides them), `power_event`,
+    `sleep_inhibited` (attribute `inhibitors`), `lid_closed`/`docked` (only with a lid switch),
+    `keep_awake`, `user_active`, `idle_seconds` (0 while active, refreshed every 30 s while
+    idle), `session_state`.
+  - `power.buttons` default is `["suspend","hibernate","reboot","poweroff"]`. "lock" comes from
+    the lock capability; "logout" from the KDE backend (M11).
+  - hostname1 was not needed: identity still reads files, including `/etc/machine-info`.
+  - The Wayland idle thread polls its socket with a 500 ms timeout, so it stops promptly on
+    cancel.
+  - VM: suspend uses s2idle (`SuspendState=freeze`), which at least fails without corrupting
+    state. Recover a frozen guest with `system_reset` in the QEMU monitor. Polkit refuses
+    suspend from ssh (not the active session); use the HA button or `sudo`.
+  - Fixed a race in the M3 uninstall broker test (it read retained topics before the attributes
+    had been published). It failed in CI on the M5 push.
 
 ### M7: Linux hardware and services
 - [ ] UPower (battery, AC, dynamic peripherals); power-profile select; NetworkManager SSID and
@@ -550,6 +590,7 @@ Dependency order:
 | 2026-11-01 | M3 | `doctor [--json]`, `print-discovery [--all]`, `uninstall` (admin MQTT client), journald priorities, sd-notify READY/STOPPING via `HubHandle::wait_released`. Scripts, command sensors, sysinfo metrics (GPU via sysinfo, sampled on its own thread because `Gpus` is not `Send`), `boot_time`, derived-sensor helpers (`Inputs`, `Debounced`). CI `release-binary` job on ubuntu-22.04 and `docs/dev/deploy-to-host.md`. Acceptance checked against the dev HA. Fixed `bootstrap.sh` re-runs. User grew the disk (95 GB free) for M4 |
 | 2026-11-01 | M4 | Plasma 6 Wayland VM (`nix/plasma-vm.nix`, `just vm`/`vm-headless`/`vm-ssh`/`vm-deploy`/`vm-screenshot`), workspace over 9p, host build as a `deskhand-dev` user service reporting to the host broker; checked by screenshot, over ssh (KWin on the bus) and in HA. `TestBus` plus logind and ScreenSaver mocks with 4 tests. Launcher unsets a host `LD_LIBRARY_PATH` that broke QEMU |
 | 2026-11-01 | M5 | Eight probes run in the VM on Plasma 6.6.6; all work (`docs/dev/spikes.md`). Plan changes: logind session via `User.Display`; DnD written through `plasmanotifyrc` + KConfig notify; kglobalaccel key sequences must be four ints (a short array aborted KWin); KWin script sends one JSON string. VM gained a v4l2loopback camera and mpv |
+| 2026-11-01 | M6 | LinuxEnv (`User.Display` session); lock (logind/ScreenSaver, unlock gate), power (Can*-gated buttons, delay inhibitor + PrepareSleep/Sleep/Resume, power_event, lid/dock, sleep_inhibited), keep_awake, idle (Wayland v2 thread, ScreenSaver poll, logind), `session_state`. 12 new mock/unit tests and a sleep/resume broker test. Fixed: transport never sent offline/DISCONNECT on sleep; flaky uninstall broker test (CI red on the M5 push). VM checks passed except resume: the QEMU guest never wakes, so resume is covered by the broker test and still needs a check on the real host |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

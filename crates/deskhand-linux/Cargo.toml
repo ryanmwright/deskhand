@@ -12,7 +12,12 @@ default = ["audio-pulse"]
 audio-pulse = ["dep:libpulse-binding"]
 
 [dependencies]
+async-trait.workspace = true
 deskhand-core.workspace = true
+futures-util.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 inotify.workspace = true
 libpulse-binding = { workspace = true, optional = true }
 tokio.workspace = true
@@ -22,8 +27,10 @@ wayland-protocols.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
+deskhand-core = { workspace = true, features = ["test-util"] }
+deskhand-testkit.workspace = true
 tempfile.workspace = true
+tokio-util.workspace = true
 
 # M5 spike probes (docs/dev/spikes.md). Run them inside the Plasma VM.
 [[example]]

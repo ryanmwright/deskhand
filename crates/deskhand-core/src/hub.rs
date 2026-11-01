@@ -26,6 +26,9 @@ use crate::transport::{EntityDescriptor, HubEvent, Snapshot, TransportEvent, Tra
 /// Machine power lifecycle, broadcast to integrations and the supervisor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lifecycle {
+    /// The machine will sleep shortly. Integrations publish their "going to
+    /// sleep" states now, while the transport is still connected.
+    PrepareSleep,
     Sleep,
     Resume,
 }
@@ -90,6 +93,7 @@ pub(crate) enum HubMsg {
         available: bool,
     },
     Pause(bool),
+    PrepareSleep,
     Sleep,
     Resume,
     Shutdown,
@@ -590,6 +594,9 @@ impl Hub {
                         }
                     }
                 }
+            }
+            HubMsg::PrepareSleep => {
+                let _ = self.lifecycle.send(Lifecycle::PrepareSleep);
             }
             HubMsg::Sleep => {
                 let _ = self.lifecycle.send(Lifecycle::Sleep);

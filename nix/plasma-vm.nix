@@ -143,6 +143,11 @@ in
   services.power-profiles-daemon.enable = true;
   services.upower.enable = true;
 
+  # QEMU's S3 suspend hangs the guest on resume (virtio devices); s2idle
+  # ("freeze") resumes reliably. Wake it with the QEMU monitor (`sendkey`
+  # or `system_wakeup`).
+  systemd.sleep.settings.Sleep.SuspendState = "freeze";
+
   networking.firewall.enable = false;
   documentation.enable = false;
   # Keep the VM quick to build and boot.
