@@ -532,7 +532,8 @@ pub async fn load_art(url: &str) -> Option<Bytes> {
             return None;
         }
         tokio::fs::read(&path).await.ok()?
-    } else if let Some(rest) = url.strip_prefix("data:") {
+    } else {
+        let rest = url.strip_prefix("data:")?;
         let (meta, data) = rest.split_once(',')?;
         if !meta.ends_with(";base64") || data.len() > MAX_ART_BYTES * 4 / 3 + 4 {
             return None;
@@ -540,8 +541,6 @@ pub async fn load_art(url: &str) -> Option<Bytes> {
         base64::engine::general_purpose::STANDARD
             .decode(data.trim())
             .ok()?
-    } else {
-        return None;
     };
     (!bytes.is_empty() && bytes.len() <= MAX_ART_BYTES).then(|| Bytes::from(bytes))
 }
