@@ -685,6 +685,7 @@ name = "deskhand-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "humantime-serde",
  "serde",
  "serde_ignored",

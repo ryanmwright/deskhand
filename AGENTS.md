@@ -51,6 +51,8 @@ crates/
 - Each backend returns candidate integrations grouped by capability, in priority order. The supervisor probes them and starts the first available one per capability.
 - **Plugins are compile-time**, selected with cargo features on the `deskhand` binary (`kde`, `linux`, `tray`, `setup`, `audio-pulse`). Do not use dynamic loading; Rust handles it poorly and compile-time selection is simpler and safer.
 - A backend only registers the capabilities its platform supports. The core must not assume any capability exists.
+- Core API in brief: `Integration { id, capability, description, probe, run(&self, ctx) }`. `Ctx` hands out handles (`ctx.sensor(spec)`, `ctx.switch(spec) -> (Switch, Commands<bool>)`, ...). Call `ctx.ready()` once the initial states are set. The hub owns all state; the transport gets `HubEvent`s and requests a full `Snapshot` on every (re)connect.
+- Tests that need a transport use `deskhand_core::testing::FakeTransport` (feature `test-util`, re-exported by `deskhand-testkit`) and `#[tokio::test(start_paused = true)]`.
 - `deskhand_core::APP_ID` is the single source for the D-Bus name, desktop file and portal app id.
 
 ## Development
@@ -86,4 +88,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: **M1 (core model and hub)**.
+Next step: **M2 (MQTT transport)**.

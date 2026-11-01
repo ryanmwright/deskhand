@@ -7,8 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+# Exposes `deskhand_core::testing` (FakeTransport) to other crates' tests.
+test-util = []
+
 [dependencies]
 async-trait.workspace = true
+bytes.workspace = true
 humantime-serde.workspace = true
 serde.workspace = true
 serde_ignored.workspace = true
@@ -19,6 +24,9 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

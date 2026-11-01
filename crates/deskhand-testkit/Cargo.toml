@@ -9,7 +9,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-deskhand-core.workspace = true
+deskhand-core = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 testcontainers.workspace = true
 tokio.workspace = true

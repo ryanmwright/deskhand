@@ -67,7 +67,7 @@ crates/
     fn capability(&self) -> &'static str;  // "audio" (provider group)
     fn description(&self) -> &'static str; // shown by doctor
     async fn probe(&self) -> Probe;        // Available{detail} | Unavailable{reason}
-    async fn run(self: Box<Self>, ctx: Ctx) -> Result<(), IntegrationError>;
+    async fn run(&self, ctx: Ctx) -> Result<(), IntegrationError>; // &self so it can be restarted
 }
 ```
 **Entity model:**
@@ -295,16 +295,26 @@ Dependency order:
       Define the app-id / D-Bus name constant once
 - **Accept:** `nix develop -c cargo test` passes; `just dev-up` gives HA on :8123 with MQTT
   configured; CI is green.
-- **Status:** done except "CI is green". The workflow is written, but there is no GitHub remote
-  yet, so it has never run. `APP_ID` is `io.github.ryanmwright.Deskhand`. If the repo moves to
+- **Status:** done. CI passed on the first push to github.com/ryanmwright/deskhand. `APP_ID` is `io.github.ryanmwright.Deskhand`. If the repo moves to
   an org, change it in `deskhand-core` before V1 ships; it is cheap to change until then.
 
 ### M1: Core model and Hub
-- [ ] EntitySpec/EntityKind/State/CommandValue; typed handles (Drop unregisters); Ctx
-- [ ] Integration/Transport/Probe traits; Hub actor; supervisor (priority groups, backoff, re-probe)
-- [ ] Config framework (`enabled = auto|true|false`, raw `[integrations.*]` tables, serde_ignored);
+- [x] EntitySpec/EntityKind/State/CommandValue; typed handles (Drop unregisters); Ctx
+- [x] Integration/Transport/Probe traits; Hub actor; supervisor (priority groups, backoff, re-probe)
+- [x] Config framework (`enabled = auto|true|false`, raw `[integrations.*]` tables, serde_ignored);
       identity; testkit FakeTransport
 - **Accept:** about 25 paused-time unit tests pass; clippy is clean.
+- **Status:** done, with 50 tests (hub, supervisor, config, identity, entity). Deviations from the
+  design above:
+  - `Integration::run(&self, ctx)` instead of `self: Box<Self>`, so a failed integration can be
+    restarted. Integrations must be `Send + Sync` and keep per-run state inside `run`.
+  - A full command stream (capacity 8) drops the *newest* command with a warning. tokio mpsc
+    cannot evict the oldest.
+  - The startup barrier also has an absolute bound (`max_startup`, 15 s from hub start) in case
+    probing itself hangs. The 5 s `startup_timeout` starts when the supervisor reports startup
+    complete.
+  - Lock state uses `ctx::LockState`. `Ctx::raw` is an untyped escape hatch for update and
+    media_player.
 
 ### M2: MQTT transport
 - [ ] rumqttc setup (TLS, 4 MiB packets, LWT, password_file/command); topic layout
@@ -381,7 +391,8 @@ Dependency order:
 - **Accept (VM):** entities reflect UI changes within 1 s and HA commands change the desktop.
 
 ### M11: KDE desktop part 2
-- [ ] kglobalaccel custom shortcuts → events; invoke-allowlist buttons
+- [ ] kglobalaccel custom shortcuts → events; invoke-allowlist buttons. Use a **fixed component
+      name `"deskhand"`, not `APP_ID`**, so renaming the app id never orphans the user's key bindings
 - [ ] ScreenBrightness dynamic numbers; DPMS buttons; Plasma logout; opt-in output enable/disable
 - **Accept:** a shortcut fires an HA automation and appears in System Settings; brightness works.
 
@@ -437,7 +448,8 @@ Dependency order:
 | Date | Milestone | Outcome / notes |
 |---|---|---|
 | 2026-10-31 | Planning | Plan approved; decisions recorded in Context |
-| 2026-10-31 | M0 | Flake devShell, 7-crate workspace, CI workflow, cargo-deny, dev HA + Mosquitto stack (`just dev-up`, verified discovery and ACL). Findings: sysinfo 0.40 needs Rust 1.95, so `rust-version` was raised. rumqttc 0.25.1 pulls rustls-webpki 0.102 (advisories), but only for an error type; ignored in deny.toml with reasons. The HA MQTT config flow needs `protocol` and `other_settings`. CI has not run yet (no remote) |
+| 2026-10-31 | M0 | Flake devShell, 7-crate workspace, CI workflow, cargo-deny, dev HA + Mosquitto stack (`just dev-up`, verified discovery and ACL). Findings: sysinfo 0.40 needs Rust 1.95, so `rust-version` was raised. rumqttc 0.25.1 pulls rustls-webpki 0.102 (advisories), but only for an error type; ignored in deny.toml with reasons. The HA MQTT config flow needs `protocol` and `other_settings`. CI passed on the first push |
+| 2026-11-01 | M1 | Core model, hub, supervisor, config and identity in `deskhand-core`; `FakeTransport` behind a `test-util` feature, re-exported by the testkit. 50 tests on paused time, stable over 30 runs. Deviations recorded under M1 |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.
