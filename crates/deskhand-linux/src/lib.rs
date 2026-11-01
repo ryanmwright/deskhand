@@ -5,6 +5,7 @@
 //! NetworkManager, portal settings, PulseAudio/PipeWire audio, camera and
 //! Wayland idle detection.
 
+pub mod appearance;
 #[cfg(feature = "audio-pulse")]
 pub mod audio;
 pub mod bluetooth;
@@ -20,7 +21,7 @@ pub mod notifications;
 pub mod power;
 pub mod systemd;
 pub mod upower;
-mod util;
+pub mod util;
 
 #[cfg(test)]
 mod testutil;
@@ -59,5 +60,6 @@ pub fn candidates(
         #[cfg(feature = "audio-pulse")]
         Box::new(audio::AudioPulse::new()),
         Box::new(camera::Camera::new()),
+        Box::new(appearance::Appearance::portal(env.clone())),
     ]
 }

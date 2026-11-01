@@ -653,12 +653,69 @@ Dependency order:
     `next_change` and `command`, so other OS backends get the same entity ids.
 
 ### M10: KDE desktop part 1
-- [ ] KWin script integration (active window, fullscreen, display count, reload on KWin restart);
+- [x] KWin script integration (active window, fullscreen, display count, reload on KWin restart);
       also connect `captionChanged`/`fullScreenChanged` of the active window (spikes §2)
-- [ ] Virtual desktop select; night light; DnD (read `Inhibited`, write `plasmanotifyrc` with
+- [x] Virtual desktop select; night light; DnD (read `Inhibited`, write `plasmanotifyrc` with
       KConfig notify; spikes §4); accent colour and dark mode (portal read in linux, write in
       kde); mocks
 - **Accept (VM):** entities reflect UI changes within 1 s and HA commands change the desktop.
+- **Status:** done, checked in the VM (Plasma 6.6.6) against the dev HA, each within 1 s
+  unless noted:
+  - Active window: Konsole and mpv were reported with app id and title. mpv `--fs` set
+    `fullscreen`, and closing it returned to Konsole with fullscreen off. A Konsole title change
+    (`cd /tmp`) arrived after about 2 s, because Konsole updates its title on a timer.
+  - Virtual desktops: switching from HA changed KWin's current desktop, and switching in
+    KWin updated HA. A desktop added in KWin appears in the options after the 1 s discovery
+    debounce.
+  - DnD: HA on wrote `Until=2100,…` and plasmashell's `Inhibited` followed; off deleted it.
+    Plasma's own "toggle do not disturb" shortcut was reflected both ways.
+  - Night light: HA's suspend switch set and cleared KWin's `inhibited`.
+  - Dark mode: HA switched to BreezeDark (`plasma-apply-colorscheme` takes about 2–3 s), and
+    a scheme change on the desktop updated HA. `plasma-apply-colorscheme --accent-color`
+    updated `accent_colour` through the portal.
+  - 12 new tests: KDE crate 10 (active window with a forged-call check and the title option,
+    desktops, night light, DnD write and `Inhibit` fallback, scheme names, tool lookup) and
+    portal appearance 2, against a new `MockKWin` (Scripting, VirtualDesktopManager,
+    NightLight), `MockPortal`, and DnD support in `MockNotifications`.
+- **Fixed on the way:**
+  - NixOS `systemd.user.services` units get a minimal `PATH` (coreutils, grep, systemd), so
+    `kwriteconfig6` and `plasma-apply-colorscheme` were not found and DnD silently fell back
+    to `Inhibit`. Tools are now looked up in `PATH`, then `/run/current-system/sw/bin`, the
+    per-user and Nix profiles, and `/usr/bin`. (Home Manager units inherit the user
+    manager's full `PATH`, but Deskhand should not depend on that.)
+  - KWin's `VirtualDesktopManager.desktops` is `a(uss)` on the wire although its
+    introspection says `a(iss)`; both are accepted, and the mock sends `a(uss)`.
+- **Notes and deviations:**
+  - Capabilities and entities:
+    - `active_window` (`active_window.kwin`): `active_window` (app id: desktop file name, else
+      window class; `none` without a window; attributes `title` unless `publish_title =
+      false`, `app_id`, `resource_class`, `pid`, `output`; coalesced to one update per
+      500 ms), `fullscreen`, `display_count`. The lock screen is reported as `kwin_wayland`
+      (KWin draws it).
+    - `virtual_desktop` (`virtual_desktop.kwin`): select by name (` 2` for duplicates),
+      attributes `number` and `count`.
+    - `night_light` (`night_light.kwin`): `night_light` (running; attributes `enabled`,
+      `mode`, `target_temperature`), `night_light_temperature` (K), `night_light_inhibit`
+      switch (HA name "Suspend night light"). Plasma 6.6 has no `activateManual`, so there is
+      no "force on" switch. Turning the switch off only ends Deskhand's own inhibition.
+    - `dnd` (`dnd.plasma`): switch "Do not disturb". On writes a far-future date (2100)
+      rather than now + 1 year as the tray does.
+    - `appearance` (`appearance.kde` on Plasma, else `appearance.portal` in deskhand-linux,
+      read-only with `dark_mode` as a binary sensor): `dark_mode`, `accent_colour` (`#rrggbb`,
+      attribute `rgb`). Options `light_scheme`/`dark_scheme` (default BreezeLight/BreezeDark).
+      The plan's `dark_mode.light/dark` options became `[integrations.appearance]`.
+  - Every KDE candidate probes unavailable outside Plasma (`XDG_CURRENT_DESKTOP` without
+    `KDE`) or without KWin, and they are registered before the Linux ones, so `appearance.kde`
+    wins over `appearance.portal`.
+  - The KWin script calls back on Deskhand's unique bus name (no well-known name needed), at
+    `/io/github/ryanmwright/Deskhand/KWin`; the callback rejects any sender that is not the
+    current owner of `org.kde.KWin`. A KWin restart ends the run, and the restart reloads the
+    script. A leftover script of the same plugin name is unloaded first, and the script is
+    unloaded on stop.
+  - `deskhand_linux::util` is public (signal helpers, now with a path filter) for backend
+    crates.
+  - VM: Plasma auto-locks after 5 min idle, which makes the active window `kwin_wayland`.
+    `sudo loginctl unlock-sessions` unlocks (polkit refuses it from ssh without sudo).
 
 ### M11: KDE desktop part 2
 - [ ] kglobalaccel custom shortcuts → events; invoke-allowlist buttons. Use a **fixed component
@@ -765,6 +822,7 @@ Dependency order:
 | 2026-11-01 | M8 | Notifications (notify entity, rich JSON with tag/actions/inline reply/dismiss, `notification_event`) and media (`MediaSource` + `MediaKit` in common, MPRIS multiplexer, art from file/data URLs, HACS `mqtt_media_player` compat renderer with per-field diffing). Checked in the VM: a notification action fired an HA automation, the inline reply arrived, and HA controlled mpv's play/pause, volume and seek, including through the compat player. 13 new tests, `MockMpris`/`MockNotifications`, `TestRig` moved to core. Fixed: notifications held up the startup barrier while plasmashell started. New `dev/vm/click.sh` (QMP) and `dev/ha/api.sh` |
 | 2026-11-01 | M9 | AudioKit (common) + libpulse thread (volume, mute, device selects, mic, `mic_in_use` with apps, headphones), camera (inotify trigger, 250 ms settle, `/proc` scan, hotplug), `in_call` derived sensor. Checked in the VM with virtual devices: volume sync both ways, output switching, mic/camera/in_call with app names. Fixed a hub bug: a select state using a new option was rejected by HA and never resent. 7 new tests. Browser call, PipeWire camera use and corked mic still to check on the KDE host |
 | 2026-11-01 | M13 (part) | Base Home Manager module pulled forward: `homeManagerModules.default` (`enable`, `package`, `settings`, `passwordFile`), a stub-based `checks.hm-module`, checked with real Home Manager in the VM. Also fixed a clippy lint that only the newer stable toolchain in CI reports (M8 push was red) |
+| 2026-11-01 | M10 | KDE crate: active window via a KWin script (sender-checked callback, caption/fullscreen tracking, reload on KWin restart), virtual desktop select, night light with inhibit switch, Plasma DnD (plasmanotifyrc + KConfig notify, `Inhibit` fallback), colour scheme writer; portal `appearance` (dark mode, accent colour) in linux. All checked in the VM. Fixed: tools not found under NixOS user units' minimal PATH; KWin's desktops property has a different wire type than introspected. 12 new tests, `MockKWin`, `MockPortal` |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

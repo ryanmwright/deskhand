@@ -716,9 +716,14 @@ dependencies = [
 name = "deskhand-kde"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deskhand-core",
  "deskhand-linux",
+ "deskhand-testkit",
  "futures-util",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "zbus",

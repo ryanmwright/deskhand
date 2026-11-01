@@ -88,6 +88,10 @@ impl Setup {
                 .and_then(|c| c.options::<deskhand_linux::systemd::SystemdOptions>().ok())
                 .map(|p| p.value.units)
                 .unwrap_or_default();
+            // Desktop backends first: they win where they share a capability
+            // with the generic Linux integrations (appearance).
+            #[cfg(feature = "kde")]
+            list.extend(deskhand_kde::candidates(&env));
             list.extend(deskhand_linux::candidates(
                 &env,
                 self.general.idle_threshold,

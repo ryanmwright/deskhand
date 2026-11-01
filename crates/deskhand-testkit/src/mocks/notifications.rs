@@ -30,6 +30,9 @@ struct State {
     next_id: u32,
     received: Vec<Received>,
     closed: Vec<u32>,
+    /// Do Not Disturb set by the user (or a config write).
+    user_dnd: bool,
+    inhibit_cookies: Vec<u32>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -93,6 +96,43 @@ impl Server {
         ("Mock".into(), "Deskhand".into(), "1.0".into(), "1.2".into())
     }
 
+    async fn inhibit(
+        &self,
+        _desktop_entry: &str,
+        _reason: &str,
+        _hints: HashMap<String, OwnedValue>,
+        #[zbus(signal_emitter)] e: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<u32> {
+        let cookie = {
+            let mut s = self.state.lock().unwrap();
+            let c = s.inhibit_cookies.len() as u32 + 100;
+            s.inhibit_cookies.push(c);
+            c
+        };
+        self.inhibited_changed(&e).await?;
+        Ok(cookie)
+    }
+
+    async fn un_inhibit(
+        &self,
+        cookie: u32,
+        #[zbus(signal_emitter)] e: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        self.state
+            .lock()
+            .unwrap()
+            .inhibit_cookies
+            .retain(|c| *c != cookie);
+        self.inhibited_changed(&e).await?;
+        Ok(())
+    }
+
+    #[zbus(property)]
+    async fn inhibited(&self) -> bool {
+        let s = self.state.lock().unwrap();
+        s.user_dnd || !s.inhibit_cookies.is_empty()
+    }
+
     #[zbus(signal)]
     async fn notification_closed(e: &SignalEmitter<'_>, id: u32, reason: u32) -> zbus::Result<()>;
 
@@ -138,6 +178,22 @@ impl MockNotifications {
 
     async fn emitter(&self) -> zbus::Result<SignalEmitter<'static>> {
         SignalEmitter::new(&self.conn, PATH)
+    }
+
+    /// Do Not Disturb as the user (or a plasmanotifyrc write) sets it.
+    pub async fn set_user_dnd(&self, on: bool) -> zbus::Result<()> {
+        self.state.lock().unwrap().user_dnd = on;
+        let i = self
+            .conn
+            .object_server()
+            .interface::<_, Server>(PATH)
+            .await?;
+        i.get().await.inhibited_changed(i.signal_emitter()).await
+    }
+
+    /// Active `Inhibit` cookies.
+    pub fn inhibitions(&self) -> usize {
+        self.state.lock().unwrap().inhibit_cookies.len()
     }
 
     /// The user clicked an action button.
