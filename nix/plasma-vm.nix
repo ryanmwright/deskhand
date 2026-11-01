@@ -123,7 +123,9 @@ in
     pulseaudio # pactl against PipeWire's pulse server
     mosquitto
     jq
-    mpv # plays lavfi test video (idle while video plays)
+    # Plays lavfi test video (idle while video plays) and audio; the mpris script
+    # makes it an MPRIS player for the media integration.
+    (mpv.override { scripts = [ mpvScripts.mpris ]; })
     v4l-utils
     wireplumber # wpctl
   ];

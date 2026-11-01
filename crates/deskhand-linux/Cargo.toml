@@ -13,6 +13,7 @@ audio-pulse = ["dep:libpulse-binding"]
 
 [dependencies]
 async-trait.workspace = true
+deskhand-common.workspace = true
 deskhand-core.workspace = true
 futures-util.workspace = true
 rustix.workspace = true
@@ -29,6 +30,7 @@ zbus.workspace = true
 [dev-dependencies]
 deskhand-core = { workspace = true, features = ["test-util"] }
 deskhand-testkit.workspace = true
+bytes.workspace = true
 tempfile.workspace = true
 tokio-util.workspace = true
 

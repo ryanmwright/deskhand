@@ -1,0 +1,43 @@
+---
+source: crates/deskhand-mqtt/src/discovery.rs
+expression: "media_player_config(&topics(), &device(), &d)"
+---
+{
+  "availability": {
+    "payload_available": "online",
+    "payload_not_available": "offline",
+    "topic": "deskhand/abc123/status"
+  },
+  "command_next_payload": "Next",
+  "command_next_topic": "deskhand/abc123/media/set",
+  "command_pause_payload": "Pause",
+  "command_pause_topic": "deskhand/abc123/media/set",
+  "command_play_payload": "Play",
+  "command_play_topic": "deskhand/abc123/media/set",
+  "command_playpause_payload": "PlayPause",
+  "command_playpause_topic": "deskhand/abc123/media/set",
+  "command_previous_payload": "Previous",
+  "command_previous_topic": "deskhand/abc123/media/set",
+  "command_seek_topic": "deskhand/abc123/media/seek",
+  "command_volume_topic": "deskhand/abc123/media/set_volume",
+  "deskhand_capability": "media",
+  "device": {
+    "identifiers": [
+      "deskhand_abc123"
+    ],
+    "manufacturer": "Deskhand",
+    "model": "KDE Plasma 6 on NixOS",
+    "name": "Desk",
+    "sw_version": "0.0.0-test"
+  },
+  "name": "Desk Media",
+  "state_album_topic": "deskhand/abc123/media/album",
+  "state_albumart_topic": "deskhand/abc123/media/albumart",
+  "state_artist_topic": "deskhand/abc123/media/artist",
+  "state_duration_topic": "deskhand/abc123/media/duration",
+  "state_mediatype_topic": "deskhand/abc123/media/mediatype",
+  "state_position_topic": "deskhand/abc123/media/position",
+  "state_state_topic": "deskhand/abc123/media/state",
+  "state_title_topic": "deskhand/abc123/media/title",
+  "state_volume_topic": "deskhand/abc123/media/volume"
+}

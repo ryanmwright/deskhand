@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::IntegrationConfig;
 use crate::ctx::{Ctx, Watches};
-use crate::entity::{Attributes, CommandValue, EntityId, EntitySpec, LockCmd, State};
+use crate::entity::{Attributes, CommandValue, EntityId, EntitySpec, LockCmd, MediaCmd, State};
 use crate::transport::{EntityDescriptor, HubEvent, Snapshot, TransportEvent, TransportLink};
 
 /// Machine power lifecycle, broadcast to integrations and the supervisor.
@@ -41,6 +41,7 @@ pub(crate) enum CommandSink {
     Number(mpsc::Sender<f64>),
     Text(mpsc::Sender<String>),
     Lock(mpsc::Sender<LockCmd>),
+    Media(mpsc::Sender<MediaCmd>),
     Raw(mpsc::Sender<CommandValue>),
 }
 
@@ -740,6 +741,7 @@ impl Hub {
             (CommandSink::Number(tx), CommandValue::Number(n)) => tx.try_send(n).err().map(drop),
             (CommandSink::Text(tx), CommandValue::Text(t)) => tx.try_send(t).err().map(drop),
             (CommandSink::Lock(tx), CommandValue::Lock(l)) => tx.try_send(l).err().map(drop),
+            (CommandSink::Media(tx), CommandValue::Media(m)) => tx.try_send(m).err().map(drop),
             (sink, value) => {
                 tracing::warn!(%id, ?value, ?sink, "command of the wrong type dropped");
                 return;

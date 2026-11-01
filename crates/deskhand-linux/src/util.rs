@@ -49,6 +49,18 @@ pub(crate) async fn signals_from(
     })
 }
 
+impl ServiceSignals {
+    /// The next signal. `None` when the service went away or restarted, or
+    /// the connection closed.
+    pub(crate) async fn next(&mut self) -> Option<zbus::Message> {
+        use futures_util::StreamExt;
+        tokio::select! {
+            m = self.signals.next() => m?.ok(),
+            _ = self.owner_changes.next() => None,
+        }
+    }
+}
+
 /// Waits for a signal, then until none arrived for `quiet`. `None` when the
 /// service went away or restarted, or the connection closed.
 pub(crate) async fn changed(s: &mut ServiceSignals, quiet: std::time::Duration) -> Option<()> {

@@ -275,6 +275,8 @@ struct Session {
     retain: HashMap<EntityId, bool>,
     json_commands: BTreeSet<EntityId>,
     availability: BTreeMap<Arc<str>, bool>,
+    /// Field payloads last published per compat media player.
+    media_sent: HashMap<EntityId, HashMap<&'static str, Bytes>>,
 }
 
 #[async_trait::async_trait]
@@ -318,6 +320,7 @@ impl Transport for MqttTransport {
             retain: HashMap::new(),
             json_commands: BTreeSet::new(),
             availability: BTreeMap::new(),
+            media_sent: HashMap::new(),
         };
 
         loop {
@@ -380,10 +383,15 @@ impl Session {
                 tracing::info!("connected to MQTT broker");
                 self.connected = true;
                 self.subscribe(self.topics.command_filter());
+                for filter in self.topics.media_command_filters() {
+                    self.subscribe(filter);
+                }
                 self.subscribe(self.topics.ha_status());
                 if self.adopted {
                     self.report(TransportEvent::Connected);
                 } else {
+                    // Before the device document, so its retained copy arrives first.
+                    self.subscribe(self.topics.media_player_config());
                     self.subscribe(self.topics.device_config());
                     self.awaiting_retained =
                         Some(Instant::now() + self.timings.retained_read_timeout);
@@ -396,6 +404,7 @@ impl Session {
                     self.awaiting_retained = None;
                     self.followup = None;
                     self.birth_at = None;
+                    self.media_sent.clear();
                     self.report(TransportEvent::Disconnected);
                 }
             }
@@ -414,6 +423,14 @@ impl Session {
     }
 
     fn on_message(&mut self, topic: &str, payload: &[u8], retain: bool) {
+        if topic == self.topics.media_player_config() {
+            if self.awaiting_retained.is_some()
+                && let Ok(previous) = serde_json::from_slice::<Value>(payload)
+            {
+                self.planner.adopt_previous_media(&previous);
+            }
+            return;
+        }
         if topic == self.topics.device_config() {
             if self.awaiting_retained.is_some() {
                 if !payload.is_empty() {
@@ -436,7 +453,12 @@ impl Session {
             }
             return;
         }
-        let Some(id) = self.topics.id_from_command(topic) else {
+        let media = self.topics.id_from_media_command(topic);
+        let Some(id) = media
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .or_else(|| self.topics.id_from_command(topic))
+        else {
             return;
         };
         if retain {
@@ -447,7 +469,12 @@ impl Session {
         if self.paused {
             return;
         }
-        let value = if self.json_commands.contains(&id) {
+        let value = if let Some((_, command)) = media {
+            match self.kinds.get(&id) {
+                Some(EntityKind::MediaPlayer) => payload::decode_media_command(command, payload),
+                _ => return,
+            }
+        } else if self.json_commands.contains(&id) {
             payload::decode_json(payload)
         } else if let Some(kind) = self.kinds.get(&id) {
             payload::decode_command(kind, payload)
@@ -466,8 +493,13 @@ impl Session {
     fn finish_retained_read(&mut self) {
         self.awaiting_retained = None;
         self.adopted = true;
-        if let Err(e) = self.client.try_unsubscribe(self.topics.device_config()) {
-            tracing::debug!(error = %e, "unsubscribe failed");
+        for topic in [
+            self.topics.device_config(),
+            self.topics.media_player_config(),
+        ] {
+            if let Err(e) = self.client.try_unsubscribe(topic) {
+                tracing::debug!(error = %e, "unsubscribe failed");
+            }
         }
         self.report(TransportEvent::Connected);
     }
@@ -533,6 +565,17 @@ impl Session {
         self.followup = rendered
             .followup
             .map(|doc| (Instant::now() + self.timings.stub_delay, doc));
+        if let Some(doc) =
+            self.planner
+                .render_media(&self.topics, &self.device, &self.entities, &live)
+        {
+            self.publish(
+                self.topics.media_player_config(),
+                doc,
+                true,
+                QoS::AtLeastOnce,
+            );
+        }
     }
 
     fn publish_snapshot(&mut self, snap: Snapshot) {
@@ -551,6 +594,7 @@ impl Session {
                 self.publish_capability(&cap, false);
             }
         }
+        self.media_sent.clear();
         for (id, state) in &snap.states {
             self.publish_state(id, state, None);
         }
@@ -574,10 +618,14 @@ impl Session {
         );
     }
 
-    fn publish_state(&self, id: &EntityId, state: &deskhand_core::State, retain: Option<bool>) {
+    fn publish_state(&mut self, id: &EntityId, state: &deskhand_core::State, retain: Option<bool>) {
         let Some(kind) = self.kinds.get(id) else {
             return;
         };
+        if matches!(kind, EntityKind::MediaPlayer) {
+            self.publish_media(id, state);
+            return;
+        }
         let retain = retain.unwrap_or_else(|| self.retain.get(id).copied().unwrap_or(true));
         self.publish(
             self.topics.state(id),
@@ -585,6 +633,30 @@ impl Session {
             retain,
             QoS::AtMostOnce,
         );
+    }
+
+    /// Publishes the compat media player's fields that changed. The position
+    /// is resent whenever the state changes, because HA extrapolates it from
+    /// the time it was received.
+    fn publish_media(&mut self, id: &EntityId, state: &deskhand_core::State) {
+        let mut sent = self.media_sent.remove(id).unwrap_or_default();
+        let fields = payload::media_fields(state);
+        let state_changed = fields
+            .iter()
+            .any(|(f, v)| *f == "state" && sent.get(f) != Some(v));
+        for (field, value) in fields {
+            if sent.get(field) == Some(&value) && !(state_changed && field == "position") {
+                continue;
+            }
+            let topic = if field == "state" {
+                self.topics.state(id)
+            } else {
+                self.topics.media_field(id, field)
+            };
+            self.publish(topic, value.clone(), true, QoS::AtMostOnce);
+            sent.insert(field, value);
+        }
+        self.media_sent.insert(id.clone(), sent);
     }
 
     fn on_hub_event(&mut self, ev: HubEvent) {

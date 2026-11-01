@@ -537,11 +537,75 @@ Dependency order:
     Waiting on single events missed values that arrived together in the startup snapshot.
 
 ### M8: Notifications and MPRIS media
-- [ ] notify entity; rich JSON topic; action and reply events; tag → replaces_id
-- [ ] `MediaSource` trait + MediaKit; MPRIS multiplexer (NameOwnerChanged, PropertiesChanged,
+- [x] notify entity; rich JSON topic; action and reply events; tag → replaces_id
+- [x] `MediaSource` trait + MediaKit; MPRIS multiplexer (NameOwnerChanged, PropertiesChanged,
       Seeked); art image; compat media_player renderer and snapshot; mock MPRIS tests
 - **Accept:** clicking a notification action fires an HA automation; HA controls play/pause and
   volume; the compat media_player works, including seek.
+- **Status:** done, checked in the VM against the dev HA:
+  - HA sent a rich notification (`mqtt.publish` to `notification/set`). Plasma showed it with
+    Reply, Unlock and Ignore. Clicking Unlock fired `notification_event` (`action: unlock`,
+    `tag: door`) and a test automation conditioned on it ran. Typing into the inline reply sent
+    `reply: "yes"`. Each was followed by `closed`.
+  - mpv (with the `mpris` script) playing an MP3 with embedded cover art: `media_state`
+    showed title, artist, album and duration, and `media_art` and the compat player both
+    served the exact cover bytes. HA's play/pause button and volume number controlled mpv, and
+    the volume stayed in sync both ways. Through the compat player (HACS `mqtt_media_player`
+    2026.10.0 installed in the dev HA), play, volume_set and seek worked: after seeking to
+    120 s, mpv was at 122 s two seconds later. When mpv quit, the state went to `idle`.
+  - 13 new tests: MediaKit (5, against a fake source), MPRIS and notifications against new
+    `MockMpris`/`MockNotifications` (3), compat payloads, topics and discovery (4, including a
+    snapshot), and a broker test for the compat player's fields and commands.
+- **Notes and deviations:**
+  - Capabilities and entities:
+    - `media` (`media.mpris`): `media_state` enum sensor (playing/paused/stopped/idle;
+      attributes player, title, artist, album, duration, position, position_updated_at,
+      art_url), buttons `media_play_pause`/`media_next`/`media_previous`/`media_stop`,
+      `media_volume` (0–100 % slider), `media_player` select (`auto` or a player's name, with
+      ` 2` for duplicates), `media_art` image, and `media` (the compat player) only with
+      `compat_mqtt_media_player = true`. Option `ignore_players` matches the player name
+      (MPRIS `Identity`) or app id (`DesktopEntry`, else the bus name suffix), ignoring case.
+    - `notifications` (`notifications.freedesktop`): `notify` entity, JSON endpoint
+      `notification` (`notification/set`, separate from the event entity because the hub
+      cannot share an id between an entity and a JSON endpoint), and `notification_event`
+      (`action`/`reply`/`closed` with `tag` and `title`). The JSON also takes
+      `{"tag": ..., "dismiss": true}`. Unknown JSON keys are ignored. The body is escaped when
+      the server renders markup. Events are only reported for our own notifications (at most
+      256 tracked).
+  - `auto` follows the player that most recently started playing, then the one that played
+    last, then the first. A chosen player that quits resets the select to `auto`.
+  - Core: `MediaCmd`, `CommandValue::Media`, `State::Media(MediaPlayerState)` and
+    `Ctx::media_player` replace the `raw` escape hatch for media players. `MediaKit` lives in
+    `deskhand-common`, so `deskhand-linux` now depends on it.
+  - **Compat media player:** the component reads `state_*_topic`/`command_*_topic` keys
+    (renamed upstream; older docs show the unprefixed names). It allows a single availability
+    topic, so it follows Deskhand's global status (LWT), not the `media` capability. Each
+    field has its own retained topic (`<id>/title`, ...) and only changed fields are
+    republished; the position is resent on every state change, because HA extrapolates it
+    from the time it arrives. Album art is base64. Commands: `<id>/set`
+    (Play/Pause/PlayPause/Next/Previous), `<id>/seek`, `<id>/set_volume`; no play_media.
+    The document carries `deskhand_capability`, so stale cleanup treats it like device
+    components. HA needs `mqtt_media_player:` in `configuration.yaml`, because the
+    component only subscribes to discovery from `async_setup`.
+  - **Cover art:** `file://` and base64 `data:` URLs only (up to 2 MiB). Remote `http(s)` art
+    (Spotify, browsers) is not fetched, to avoid an HTTP client dependency. Its URL is in
+    `art_url`, which is only set for remote art. Without art the image is cleared (empty
+    payload), and HA then serves no picture. The image declares `image/jpeg` even for PNG
+    art; browsers sniff it.
+  - MPRIS: any signal on `/org/mpris/MediaPlayer2` from a player's owner marks it dirty;
+    dirty players are re-read with `GetAll` after 100 ms without signals. That also refreshes
+    `Position`, which MPRIS never signals. Seek uses `SetPosition` with the track id, falling
+    back to a relative `Seek`.
+  - Notifications register their entities and call `ready()` before `GetCapabilities`: at
+    login plasmashell may still be starting, and the call blocked the startup barrier in the
+    first VM run.
+  - The `TestRig` from `deskhand-linux` moved to `deskhand_core::testing` (with `wait_event`,
+    `state`, `attributes`, `settle`, `take_events`), so `deskhand-common` tests use it too.
+  - Dev tooling: `dev/vm/click.sh X Y` clicks in a headless VM through QMP absolute tablet
+    events (`just vm-headless` now opens `/tmp/plasma-vm.qmp`). HMP `mouse_move` only sends
+    relative motion to the PS/2 mouse, which KWin ignores here. `dev/ha/api.sh` calls the dev
+    HA REST API. The VM's mpv has the `mpris` script. Test media lives in the ignored
+    `dev/vm/media/`.
 
 ### M9: Audio, camera, in-call
 - [ ] libpulse mainloop thread with subscriptions; AudioKit (volume, mute, device selects, mic,
@@ -629,6 +693,7 @@ Dependency order:
 | 2026-11-01 | M5 | Eight probes run in the VM on Plasma 6.6.6; all work (`docs/dev/spikes.md`). Plan changes: logind session via `User.Display`; DnD written through `plasmanotifyrc` + KConfig notify; kglobalaccel key sequences must be four ints (a short array aborted KWin); KWin script sends one JSON string. VM gained a v4l2loopback camera and mpv |
 | 2026-11-01 | M6 | LinuxEnv (`User.Display` session); lock (logind/ScreenSaver, unlock gate), power (Can*-gated buttons, delay inhibitor + PrepareSleep/Sleep/Resume, power_event, lid/dock, sleep_inhibited), keep_awake, idle (Wayland v2 thread, ScreenSaver poll, logind), `session_state`. 12 new mock/unit tests and a sleep/resume broker test. Fixed: transport never sent offline/DISCONNECT on sleep; flaky uninstall broker test (CI red on the M5 push). VM checks passed except resume: the QEMU guest never wakes, so resume is covered by the broker test and still needs a check on the real host |
 | 2026-11-01 | M7 | UPower battery/AC/dynamic peripheral batteries, power-profile select, NetworkManager connectivity and SSID, BlueZ adapter and dynamic device switches, systemd user-unit switches (allowlist), GameMode; mocks for all six services and 9 tests. systemd and power profile checked in the VM; Bluetooth needs a check on the KDE host (no adapter here). Signal matching uses the service's unique name, with a restart when the owner changes |
+| 2026-11-01 | M8 | Notifications (notify entity, rich JSON with tag/actions/inline reply/dismiss, `notification_event`) and media (`MediaSource` + `MediaKit` in common, MPRIS multiplexer, art from file/data URLs, HACS `mqtt_media_player` compat renderer with per-field diffing). Checked in the VM: a notification action fired an HA automation, the inline reply arrived, and HA controlled mpv's play/pause, volume and seek, including through the compat player. 13 new tests, `MockMpris`/`MockNotifications`, `TestRig` moved to core. Fixed: notifications held up the startup barrier while plasmashell started. New `dev/vm/click.sh` (QMP) and `dev/ha/api.sh` |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

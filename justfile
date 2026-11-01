@@ -55,9 +55,10 @@ mqtt-watch:
 vm:
     nix run .#plasma-vm
 
-# Boot the VM without a window (QEMU monitor at /tmp/plasma-vm.mon for screenshots)
+# Boot the VM without a window (QEMU monitor at /tmp/plasma-vm.mon for screenshots,
+# QMP at /tmp/plasma-vm.qmp for dev/vm/click.sh)
 vm-headless:
-    QEMU_OPTS="-display none -monitor unix:/tmp/plasma-vm.mon,server,nowait" nix run .#plasma-vm
+    QEMU_OPTS="-display none -monitor unix:/tmp/plasma-vm.mon,server,nowait -qmp unix:/tmp/plasma-vm.qmp,server,nowait" nix run .#plasma-vm
 
 # ssh into the VM (or run a command there)
 vm-ssh *ARGS:

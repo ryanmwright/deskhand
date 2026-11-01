@@ -11,7 +11,9 @@ pub mod gamemode;
 pub mod identity;
 pub mod idle;
 pub mod lock;
+pub mod mpris;
 pub mod network;
+pub mod notifications;
 pub mod power;
 pub mod systemd;
 pub mod upower;
@@ -49,5 +51,7 @@ pub fn candidates(
         Box::new(bluetooth::Bluetooth::new(env.clone())),
         Box::new(systemd::SystemdUnits::new(env.clone(), systemd_units)),
         Box::new(gamemode::GameMode::new(env.clone())),
+        Box::new(mpris::MediaMpris::new(env.clone())),
+        Box::new(notifications::Notifications::new(env.clone())),
     ]
 }

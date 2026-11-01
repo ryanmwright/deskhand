@@ -560,6 +560,35 @@ pub enum State {
     Text(String),
     Json(serde_json::Value),
     Bytes(bytes::Bytes),
+    /// Full state of a media player entity ([`EntityKind::MediaPlayer`]).
+    Media(Box<MediaPlayerState>),
+}
+
+/// What a media player entity shows. Transports that render media players
+/// publish each field on its own and only when it changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MediaPlayerState {
+    /// `playing`, `paused`, `stopped` or `idle` (no player).
+    pub state: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Track length in whole seconds.
+    pub duration: Option<u64>,
+    /// Playback position in whole seconds, as of when this state was set.
+    pub position: Option<u64>,
+    /// 0.0 to 1.0.
+    pub volume: Option<f64>,
+    /// `music`, `video`, ...
+    pub media_type: Option<String>,
+    /// Cover art image bytes.
+    pub art: Option<bytes::Bytes>,
+}
+
+impl From<MediaPlayerState> for State {
+    fn from(v: MediaPlayerState) -> Self {
+        Self::Media(Box::new(v))
+    }
 }
 
 impl From<bool> for State {
@@ -635,6 +664,21 @@ pub enum LockCmd {
     Open,
 }
 
+/// A command for a media player entity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MediaCmd {
+    Play,
+    Pause,
+    PlayPause,
+    Stop,
+    Next,
+    Previous,
+    /// Absolute position in seconds.
+    Seek(f64),
+    /// 0.0 to 1.0.
+    Volume(f64),
+}
+
 /// A command parsed by the transport, before it is routed to a typed handle.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandValue {
@@ -644,6 +688,7 @@ pub enum CommandValue {
     Text(String),
     Lock(LockCmd),
     Json(serde_json::Value),
+    Media(MediaCmd),
 }
 
 #[cfg(test)]

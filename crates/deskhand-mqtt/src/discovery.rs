@@ -261,6 +261,67 @@ pub fn device_config(
     })
 }
 
+/// Key in the compat media player document naming its owner capability
+/// (the `mqtt_media_player` component ignores unknown keys).
+const MEDIA_OWNER_KEY: &str = "deskhand_capability";
+
+/// The compat media player document for the HACS `mqtt_media_player`
+/// component, published at [`Topics::media_player_config`].
+///
+/// It has a single availability topic, so it follows Deskhand's global
+/// status (which the LWT covers) rather than the media integration's.
+pub fn media_player_config(topics: &Topics, device: &DeviceInfo, desc: &EntityDescriptor) -> Value {
+    let id = &desc.spec.id;
+    let name = match &desc.spec.name {
+        Some(n) => format!("{} {n}", device.name),
+        None => device.name.clone(),
+    };
+    let field = |f: &str| Value::from(topics.media_field(id, f));
+    let set = topics.command(id);
+    let mut c = json!({
+        "name": name,
+        "device": {
+            "identifiers": [topics.device_id()],
+            "name": device.name,
+            "manufacturer": device.manufacturer,
+            "model": device.model,
+            "sw_version": device.sw_version,
+        },
+        "availability": {
+            "topic": topics.status(),
+            "payload_available": ONLINE,
+            "payload_not_available": OFFLINE,
+        },
+        "state_state_topic": topics.state(id),
+        "command_volume_topic": field(crate::topics::MEDIA_VOLUME),
+        "command_seek_topic": field(crate::topics::MEDIA_SEEK),
+        "command_play_topic": set,
+        "command_play_payload": "Play",
+        "command_pause_topic": set,
+        "command_pause_payload": "Pause",
+        "command_playpause_topic": set,
+        "command_playpause_payload": "PlayPause",
+        "command_next_topic": set,
+        "command_next_payload": "Next",
+        "command_previous_topic": set,
+        "command_previous_payload": "Previous",
+        MEDIA_OWNER_KEY: desc.owner.as_ref(),
+    });
+    for f in [
+        "title",
+        "artist",
+        "album",
+        "duration",
+        "position",
+        "volume",
+        "albumart",
+        "mediatype",
+    ] {
+        c[format!("state_{f}_topic")] = field(f);
+    }
+    c
+}
+
 /// Result of rendering: publish `first` now and, if set, `followup` about a
 /// second later (once HA has processed the removal stubs).
 #[derive(Debug, Clone, PartialEq)]
@@ -278,6 +339,8 @@ pub struct DiscoveryPlanner {
     kept: BTreeMap<String, (Option<String>, Value)>,
     /// id → platform of every component in the last published document.
     last_published: BTreeMap<String, String>,
+    /// A compat media player document is on the broker; its owner capability.
+    media_on_broker: Option<Option<String>>,
 }
 
 impl DiscoveryPlanner {
@@ -319,6 +382,44 @@ impl DiscoveryPlanner {
                 self.kept.insert(id.clone(), (capability, c.clone()));
             }
         }
+    }
+
+    /// Takes over a compat media player document a previous run left behind.
+    pub fn adopt_previous_media(&mut self, previous: &Value) {
+        let owner = previous
+            .get(MEDIA_OWNER_KEY)
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.media_on_broker = Some(owner);
+    }
+
+    /// What to publish on the compat media player's discovery topic: a
+    /// document, an empty payload to remove it, or `None` for no change.
+    /// Like device components, a document of a capability that is enabled
+    /// but not running is kept.
+    pub fn render_media(
+        &mut self,
+        topics: &Topics,
+        device: &DeviceInfo,
+        entities: &[EntityDescriptor],
+        live: &BTreeSet<String>,
+    ) -> Option<String> {
+        if let Some(desc) = entities
+            .iter()
+            .find(|d| matches!(d.spec.kind, EntityKind::MediaPlayer))
+        {
+            self.media_on_broker = Some(Some(desc.owner.to_string()));
+            return Some(media_player_config(topics, device, desc).to_string());
+        }
+        let owner = self.media_on_broker.as_ref()?;
+        let keep = owner
+            .as_ref()
+            .is_some_and(|c| !self.disabled.contains(c) && !live.contains(c));
+        if keep {
+            return None;
+        }
+        self.media_on_broker = None;
+        Some(String::new())
     }
 
     /// Capabilities whose components are being kept (their status topics should read offline).
@@ -526,6 +627,60 @@ mod tests {
             EntitySpec::new(id("media_player"), "Player", EntityKind::MediaPlayer),
         );
         assert!(component(&topics(), &d).is_none());
+    }
+
+    #[test]
+    fn media_player_document_snapshot() {
+        let d = desc(
+            "media",
+            EntitySpec::new(id("media"), "Media", EntityKind::MediaPlayer),
+        );
+        insta::assert_json_snapshot!(media_player_config(&topics(), &device(), &d));
+    }
+
+    #[test]
+    fn media_player_document_lifecycle() {
+        let t = topics();
+        let player = desc(
+            "media",
+            EntitySpec::new(id("media"), "Media", EntityKind::MediaPlayer),
+        );
+        let media = BTreeSet::from(["media".to_owned()]);
+        let none = BTreeSet::new();
+
+        // Nothing published, nothing on the broker: nothing to do.
+        let mut planner = DiscoveryPlanner::default();
+        assert_eq!(planner.render_media(&t, &device(), &[], &none), None);
+
+        let doc = planner
+            .render_media(&t, &device(), std::slice::from_ref(&player), &media)
+            .unwrap();
+        let doc: Value = serde_json::from_str(&doc).unwrap();
+        assert_eq!(doc["command_seek_topic"], "deskhand/abc123/media/seek");
+        // The entity went away while media runs (compat turned off): remove.
+        assert_eq!(
+            planner.render_media(&t, &device(), &[], &media).as_deref(),
+            Some("")
+        );
+        assert_eq!(planner.render_media(&t, &device(), &[], &media), None);
+
+        // From a previous run: kept while media is enabled but not running...
+        let mut planner = DiscoveryPlanner::default();
+        planner.adopt_previous_media(&doc);
+        assert_eq!(planner.render_media(&t, &device(), &[], &none), None);
+        // ...removed once it runs without a player entity.
+        assert_eq!(
+            planner.render_media(&t, &device(), &[], &media).as_deref(),
+            Some("")
+        );
+
+        // Removed right away when media is disabled.
+        let mut planner = DiscoveryPlanner::new(media.clone());
+        planner.adopt_previous_media(&doc);
+        assert_eq!(
+            planner.render_media(&t, &device(), &[], &none).as_deref(),
+            Some("")
+        );
     }
 
     fn component_ids(v: &Value) -> Vec<String> {

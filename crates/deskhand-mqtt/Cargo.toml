@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 bytes.workspace = true
 deskhand-core.workspace = true
 humantime-serde.workspace = true

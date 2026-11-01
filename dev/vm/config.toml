@@ -15,3 +15,7 @@ password = "deskhand-dev"
 # ~/.config/systemd/user/deskhand-test.service with ExecStart=sleep infinity.
 [integrations.systemd]
 units = ["deskhand-test.service"]
+
+# Also publish the HACS mqtt_media_player entity (M8 acceptance).
+[integrations.media]
+compat_mqtt_media_player = true

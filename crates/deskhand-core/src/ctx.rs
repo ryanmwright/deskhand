@@ -16,7 +16,10 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{ConfigError, IntegrationConfig};
-use crate::entity::{Attributes, CommandValue, EntityId, EntityKind, EntitySpec, LockCmd, State};
+use crate::entity::{
+    Attributes, CommandValue, EntityId, EntityKind, EntitySpec, LockCmd, MediaCmd,
+    MediaPlayerState, State,
+};
 use crate::hub::{CommandSink, HubMsg, Lifecycle};
 
 /// Capacity of each command stream. Commands beyond this are dropped with a warning.
@@ -281,7 +284,18 @@ impl Event {
 }
 
 handle!(
-    /// Escape hatch for kinds without a dedicated handle (update, media player).
+    /// A media player entity, rendered only by transports that support one
+    /// (the HACS `mqtt_media_player` compatibility mode).
+    MediaPlayer
+);
+impl MediaPlayer {
+    pub fn set(&self, state: MediaPlayerState) {
+        self.reg.set_state(state.into());
+    }
+}
+
+handle!(
+    /// Escape hatch for kinds without a dedicated handle (update).
     RawEntity
 );
 impl RawEntity {
@@ -486,6 +500,16 @@ impl Ctx {
         Image {
             reg: self.register(spec, None),
         }
+    }
+
+    pub fn media_player(&self, spec: EntitySpec) -> (MediaPlayer, Commands<MediaCmd>) {
+        Self::expect_kind(
+            &spec,
+            matches!(spec.kind, EntityKind::MediaPlayer),
+            "media_player",
+        );
+        let (reg, cmds) = self.register_with_commands(spec, CommandSink::Media);
+        (MediaPlayer { reg }, cmds)
     }
 
     /// Any kind, with untyped commands. Prefer the typed constructors.

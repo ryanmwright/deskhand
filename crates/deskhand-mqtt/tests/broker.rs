@@ -646,3 +646,100 @@ async fn sleep_goes_offline_and_resume_reconnects_quickly() {
     eprintln!("back online {took:?} after resume");
     d.shutdown().await;
 }
+
+#[tokio::test]
+async fn compat_media_player_fields_and_commands() {
+    use deskhand_core::entity::{EntityKind, MediaCmd, MediaPlayerState};
+    require_it!();
+    let (_broker, port) = broker().await;
+    let t = topics();
+    let media = id("media");
+    let mut obs = Observer::connect(port, "#").await;
+    // A stale retained seek must never fire.
+    obs.publish(&t.media_field(&media, "seek"), "5", true).await;
+
+    let d = Daemon::start(port, &[]);
+    let (player, mut cmds) = d.ctx.media_player(EntitySpec::new(
+        media.clone(),
+        "Media",
+        EntityKind::MediaPlayer,
+    ));
+    let mut state = MediaPlayerState {
+        state: "playing".into(),
+        title: Some("Song".into()),
+        duration: Some(200),
+        position: Some(10),
+        volume: Some(0.5),
+        art: Some(bytes::Bytes::from_static(b"art")),
+        ..Default::default()
+    };
+    player.set(state.clone());
+    d.ready();
+
+    let doc = obs
+        .wait_for(&t.media_player_config(), |m| !m.payload.is_empty())
+        .await
+        .json();
+    assert_eq!(doc["state_title_topic"], t.media_field(&media, "title"));
+    assert_eq!(doc["availability"]["topic"], t.status());
+    let mut late = Observer::connect(port, &t.device_config()).await;
+    let device = late.wait_for(&t.device_config(), |_| true).await.json();
+    assert!(
+        !components(&device).contains("media"),
+        "not part of device discovery"
+    );
+    let mut late = Observer::connect(port, &format!("deskhand/{NODE}/media/#")).await;
+    let fields: std::collections::BTreeMap<_, _> = late
+        .collect(Duration::from_secs(1))
+        .await
+        .into_iter()
+        .map(|m| (m.topic.clone(), m.text()))
+        .collect();
+    assert_eq!(fields[&t.state(&media)], "playing");
+    assert_eq!(fields[&t.media_field(&media, "title")], "Song");
+    assert_eq!(fields[&t.media_field(&media, "position")], "10");
+    assert_eq!(fields[&t.media_field(&media, "albumart")], "YXJ0");
+    assert!(
+        !fields.contains_key(&t.media_field(&media, "artist")),
+        "empty fields are not retained"
+    );
+
+    // Only changed fields are republished; a state change resends the position.
+    obs.collect(Duration::from_millis(300)).await;
+    state.state = "paused".into();
+    player.set(state.clone());
+    let msgs = obs.collect(Duration::from_secs(1)).await;
+    let topics_seen: BTreeSet<_> = msgs.iter().map(|m| m.topic.clone()).collect();
+    assert_eq!(
+        topics_seen,
+        BTreeSet::from([t.state(&media), t.media_field(&media, "position")])
+    );
+
+    // Commands on all three topics.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(cmds.try_recv(), None, "retained seek ignored");
+    obs.publish(&t.command(&media), "PlayPause", false).await;
+    obs.publish(&t.media_field(&media, "seek"), "93.5", false)
+        .await;
+    obs.publish(&t.media_field(&media, "set_volume"), "0.25", false)
+        .await;
+    let mut got = Vec::new();
+    for _ in 0..3 {
+        got.push(
+            tokio::time::timeout(Duration::from_secs(5), cmds.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        got,
+        vec![
+            MediaCmd::PlayPause,
+            MediaCmd::Seek(93.5),
+            MediaCmd::Volume(0.25)
+        ]
+    );
+
+    d.shutdown().await;
+}

@@ -7,6 +7,7 @@
 pub mod command_sensors;
 pub mod derived;
 pub mod info;
+pub mod media;
 pub mod metrics;
 pub mod process;
 pub mod scripts;
@@ -14,6 +15,7 @@ pub mod session_state;
 pub mod time;
 
 pub use command_sensors::CommandSensors;
+pub use media::{MediaKit, MediaOptions, MediaSource};
 pub use metrics::Metrics;
 pub use scripts::Scripts;
 pub use session_state::SessionState;

@@ -14,6 +14,12 @@ use deskhand_core::EntityId;
 pub const ONLINE: &str = "online";
 pub const OFFLINE: &str = "offline";
 
+/// Compat media player command topics besides `<id>/set` (which carries
+/// play/pause/next/previous).
+pub const MEDIA_SEEK: &str = "seek";
+pub const MEDIA_VOLUME: &str = "set_volume";
+const MEDIA_COMMANDS: [&str; 2] = [MEDIA_SEEK, MEDIA_VOLUME];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Topics {
     base: String,
@@ -66,6 +72,24 @@ impl Topics {
 
     pub fn command(&self, id: &EntityId) -> String {
         format!("{}/{id}/set", self.base)
+    }
+
+    /// A field topic of a compat media player (`<id>/title`, `<id>/seek`, ...).
+    pub fn media_field(&self, id: &EntityId, field: &str) -> String {
+        format!("{}/{id}/{field}", self.base)
+    }
+
+    /// Subscription filters for the compat media player's extra command topics.
+    pub fn media_command_filters(&self) -> [String; 2] {
+        MEDIA_COMMANDS.map(|c| format!("{}/+/{c}", self.base))
+    }
+
+    /// `(entity, command)` addressed by a compat media player command topic.
+    pub fn id_from_media_command(&self, topic: &str) -> Option<(EntityId, &'static str)> {
+        let rest = topic.strip_prefix(&self.base)?.strip_prefix('/')?;
+        let (id, command) = rest.split_once('/')?;
+        let command = MEDIA_COMMANDS.into_iter().find(|c| *c == command)?;
+        Some((EntityId::new(id).ok()?, command))
     }
 
     /// Subscription filter for all command topics.
@@ -144,5 +168,11 @@ mod tests {
         );
         assert_eq!(t.capability_from_status("deskhand/abc123/status"), None);
         assert_eq!(t.capability_from_status("deskhand/abc123/status/a/b"), None);
+        assert_eq!(
+            t.id_from_media_command("deskhand/abc123/media/seek"),
+            Some((EntityId::from_static("media"), MEDIA_SEEK))
+        );
+        assert_eq!(t.id_from_media_command("deskhand/abc123/media/title"), None);
+        assert_eq!(t.id_from_media_command("deskhand/abc123/media/set"), None);
     }
 }
