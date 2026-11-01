@@ -65,11 +65,14 @@ Everything runs inside the flake devShell: `nix develop` (or prefix commands wit
 | `just it` | tests including the mosquitto container integration tests (`DESKHAND_IT=1`) |
 | `just dev-up` | starts Home Assistant (:8123, `dev`/`devpassword`) and Mosquitto (:1883), then onboards HA and adds the MQTT integration |
 | `just dev-down` / `just dev-reset` | stops the stack, or stops it and wipes the HA config |
+| `just run` | runs the daemon against the dev stack (`dev/config.toml`) |
+| `dev/ha/states.sh [regex]` | prints matching HA entity states (default: `deskhand`) |
 | `just mqtt-watch` | prints all broker traffic |
 | `nix build` | builds the `deskhand` package |
 
 - Dev broker users: `deskhand`/`deskhand-dev` (ACL: `deskhand/#`, `homeassistant/#`) and `homeassistant`/`homeassistant-dev`.
 - `dev/ha/bootstrap.sh` stores an HA refresh token in `dev/ha/config/.deskhand-dev-refresh-token` for scripted checks against the HA REST API.
+- Use `pkill -x deskhand`, not `pkill -f`: the `-f` pattern also matches the shell running the command.
 - On this machine `docker` is podman. The devShell points testcontainers at the podman socket.
 - This dev host runs XFCE, not KDE. KDE features are tested in the Plasma VM (`just vm`, added in M4) or on the user's real KDE host using CI artifacts.
 
@@ -88,4 +91,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: **M2 (MQTT transport)**.
+Next step: **M3 (CLI, doctor, common integrations, CI artifacts)**.

@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 deskhand-core.workspace = true
 sysinfo.workspace = true
 tokio.workspace = true

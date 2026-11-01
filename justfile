@@ -28,6 +28,10 @@ it:
 deny:
     cargo deny check
 
+# Run the daemon against the dev stack
+run *ARGS:
+    cargo run -p deskhand -- --config dev/config.toml run {{ARGS}}
+
 # Start the dev Home Assistant + Mosquitto stack and configure HA
 dev-up:
     mkdir -p dev/ha/config

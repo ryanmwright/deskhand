@@ -29,6 +29,7 @@ ksni = { workspace = true, optional = true }
 mdns-sd = { workspace = true, optional = true }
 sd-notify.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

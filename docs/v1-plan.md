@@ -118,8 +118,7 @@ there is no state file.
 deskhand/<node>/status                 global availability; LWT "offline"; retained
 deskhand/<node>/status/<capability>    per-integration availability; retained
 deskhand/<node>/<entity>/state|attributes   retained (except events)
-deskhand/<node>/<entity>/set           commands; never retained
-deskhand/<node>/notifications/send     rich JSON notifications
+deskhand/<node>/<entity>/set           commands; never retained (also JSON endpoints such as rich notifications)
 homeassistant/media_player/deskhand_<node>/config   only when compat is enabled
 ```
 
@@ -317,13 +316,29 @@ Dependency order:
     media_player.
 
 ### M2: MQTT transport
-- [ ] rumqttc setup (TLS, 4 MiB packets, LWT, password_file/command); topic layout
-- [ ] Device-discovery renderer with insta snapshots; command routing (retained rejected)
-- [ ] Birth republish with jitter; stale cleanup; reconnect and resync; `deskhand run` with a demo
+- [x] rumqttc setup (TLS, 4 MiB packets, LWT, password_file/command); topic layout
+- [x] Device-discovery renderer with insta snapshots; command routing (retained rejected)
+- [x] Birth republish with jitter; stale cleanup; reconnect and resync; `deskhand run` with a demo
       info integration
-- [ ] testcontainers integration tests
+- [x] testcontainers integration tests
 - **Accept:** the device appears in the compose HA; `kill -9` makes it unavailable within 45 s;
   a renamed entity is cleaned up after restart; integration tests pass.
+- **Status:** done, checked against the dev HA:
+  - Entities appear in HA.
+  - `kill -9` made them unavailable in under 1 s (the LWT fires on socket close).
+  - SIGTERM published offline immediately.
+  - Disabling an integration removed its entities, and re-enabling brought them back.
+  - 15 unit and snapshot tests, plus 8 broker integration tests (`just it`), stable over repeated runs.
+- **Notes:**
+  - JSON command endpoints use `<id>/set` like entities, not a separate `notifications/send`.
+  - The poll task owns rumqttc's event loop and exits when the transport goes away, so a
+    crashed transport cannot keep a zombie session alive.
+  - The transport publishes only with `try_*` calls (queue of 2048), so a dead connection
+    never blocks the hub.
+  - `Snapshot` drives the first discovery publish. On first connect the transport reads its
+    own retained device document (1.5 s timeout) to find stale entities.
+  - `deskhand_linux::platform_identity()` reads files only. hostname1, the Plasma version and
+    other D-Bus details come in M6.
 
 ### M3: CLI, doctor, common integrations, CI artifacts
 - [ ] `run | doctor [--json] | print-discovery | uninstall`; tracing (journald-friendly); sd-notify
@@ -450,6 +465,7 @@ Dependency order:
 | 2026-10-31 | Planning | Plan approved; decisions recorded in Context |
 | 2026-10-31 | M0 | Flake devShell, 7-crate workspace, CI workflow, cargo-deny, dev HA + Mosquitto stack (`just dev-up`, verified discovery and ACL). Findings: sysinfo 0.40 needs Rust 1.95, so `rust-version` was raised. rumqttc 0.25.1 pulls rustls-webpki 0.102 (advisories), but only for an error type; ignored in deny.toml with reasons. The HA MQTT config flow needs `protocol` and `other_settings`. CI passed on the first push |
 | 2026-11-01 | M1 | Core model, hub, supervisor, config and identity in `deskhand-core`; `FakeTransport` behind a `test-util` feature, re-exported by the testkit. 50 tests on paused time, stable over 30 runs. Deviations recorded under M1 |
+| 2026-11-01 | M2 | MQTT transport (device discovery, stale cleanup, birth, LWT, reconnect, pause, sleep), `deskhand run` with a version/start-time integration, Linux file-based identity, `just run` and `dev/ha/states.sh`. Bug found by an integration test: an aborted transport left its poll task holding the connection (no LWT); fixed |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

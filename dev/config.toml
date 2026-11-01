@@ -1,0 +1,11 @@
+# Deskhand config for the local dev stack (`just dev-up`, then `just run`).
+[device]
+name = "Deskhand Dev"
+
+[general]
+log = "info,deskhand_mqtt=debug"
+
+[mqtt]
+host = "localhost"
+username = "deskhand"
+password = "deskhand-dev"

@@ -666,6 +666,7 @@ dependencies = [
  "mdns-sd",
  "sd-notify",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -674,6 +675,7 @@ dependencies = [
 name = "deskhand-common"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deskhand-core",
  "sysinfo",
  "tokio",
@@ -716,6 +718,7 @@ dependencies = [
  "deskhand-core",
  "inotify",
  "libpulse-binding",
+ "tempfile",
  "tokio",
  "tracing",
  "wayland-client",
@@ -727,15 +730,23 @@ dependencies = [
 name = "deskhand-mqtt"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "deskhand-core",
+ "humantime-serde",
  "insta",
  "rumqttc",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
+ "tempfile",
+ "testcontainers",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

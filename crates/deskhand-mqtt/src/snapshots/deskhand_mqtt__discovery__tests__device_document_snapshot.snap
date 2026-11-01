@@ -1,0 +1,334 @@
+---
+source: crates/deskhand-mqtt/src/discovery.rs
+expression: r.first
+---
+{
+  "components": {
+    "audio_output": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/audio"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/audio_output/set",
+      "json_attributes_topic": "deskhand/abc123/audio_output/attributes",
+      "name": "Output",
+      "options": [
+        "Speakers",
+        "Headphones"
+      ],
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "select",
+      "state_topic": "deskhand/abc123/audio_output/state",
+      "unique_id": "deskhand_abc123_audio_output"
+    },
+    "audio_volume": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/audio"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/audio_volume/set",
+      "json_attributes_topic": "deskhand/abc123/audio_volume/attributes",
+      "max": 100.0,
+      "min": 0.0,
+      "mode": "auto",
+      "name": "Volume",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "number",
+      "state_topic": "deskhand/abc123/audio_volume/state",
+      "step": 1.0,
+      "unique_id": "deskhand_abc123_audio_volume",
+      "unit_of_measurement": "%"
+    },
+    "boot_time": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/metrics"
+        }
+      ],
+      "availability_mode": "all",
+      "device_class": "timestamp",
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "json_attributes_topic": "deskhand/abc123/boot_time/attributes",
+      "name": "Boot time",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "sensor",
+      "state_topic": "deskhand/abc123/boot_time/state",
+      "unique_id": "deskhand_abc123_boot_time"
+    },
+    "camera_in_use": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/camera"
+        }
+      ],
+      "availability_mode": "all",
+      "json_attributes_topic": "deskhand/abc123/camera_in_use/attributes",
+      "name": "Camera in use",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "binary_sensor",
+      "state_topic": "deskhand/abc123/camera_in_use/state",
+      "unique_id": "deskhand_abc123_camera_in_use"
+    },
+    "cpu_percent": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/metrics"
+        }
+      ],
+      "availability_mode": "all",
+      "icon": "mdi:cpu-64-bit",
+      "json_attributes_topic": "deskhand/abc123/cpu_percent/attributes",
+      "name": "CPU",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "sensor",
+      "state_class": "measurement",
+      "state_topic": "deskhand/abc123/cpu_percent/state",
+      "suggested_display_precision": 1,
+      "unique_id": "deskhand_abc123_cpu_percent",
+      "unit_of_measurement": "%"
+    },
+    "demo_text": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/demo"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/demo_text/set",
+      "json_attributes_topic": "deskhand/abc123/demo_text/attributes",
+      "max": 255,
+      "min": 0,
+      "name": "Text",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "text",
+      "state_topic": "deskhand/abc123/demo_text/state",
+      "unique_id": "deskhand_abc123_demo_text"
+    },
+    "deskhand_connected": {
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "name": "Connected",
+      "payload_off": "offline",
+      "payload_on": "online",
+      "platform": "binary_sensor",
+      "state_topic": "deskhand/abc123/status",
+      "unique_id": "deskhand_abc123_deskhand_connected"
+    },
+    "keep_awake": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/power"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/keep_awake/set",
+      "json_attributes_topic": "deskhand/abc123/keep_awake/attributes",
+      "name": "Keep awake",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "switch",
+      "state_topic": "deskhand/abc123/keep_awake/state",
+      "unique_id": "deskhand_abc123_keep_awake"
+    },
+    "media_art": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/media"
+        }
+      ],
+      "availability_mode": "all",
+      "content_type": "image/png",
+      "image_topic": "deskhand/abc123/media_art/state",
+      "json_attributes_topic": "deskhand/abc123/media_art/attributes",
+      "name": "Album art",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "image",
+      "unique_id": "deskhand_abc123_media_art"
+    },
+    "media_art_url": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/media"
+        }
+      ],
+      "availability_mode": "all",
+      "json_attributes_topic": "deskhand/abc123/media_art_url/attributes",
+      "name": "Album art URL",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "image",
+      "unique_id": "deskhand_abc123_media_art_url",
+      "url_topic": "deskhand/abc123/media_art_url/state"
+    },
+    "notify": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/notifications"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/notify/set",
+      "name": "Notify",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "notify",
+      "unique_id": "deskhand_abc123_notify"
+    },
+    "screen_lock": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/lock"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/screen_lock/set",
+      "json_attributes_topic": "deskhand/abc123/screen_lock/attributes",
+      "name": "Screen",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "lock",
+      "state_jammed": "jammed",
+      "state_locked": "locked",
+      "state_locking": "locking",
+      "state_topic": "deskhand/abc123/screen_lock/state",
+      "state_unlocked": "unlocked",
+      "state_unlocking": "unlocking",
+      "unique_id": "deskhand_abc123_screen_lock"
+    },
+    "session_state": {
+      "device_class": "enum",
+      "json_attributes_topic": "deskhand/abc123/session_state/attributes",
+      "name": "Session",
+      "options": [
+        "active",
+        "idle"
+      ],
+      "platform": "sensor",
+      "state_topic": "deskhand/abc123/session_state/state",
+      "unique_id": "deskhand_abc123_session_state"
+    },
+    "shortcut_lights": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/shortcuts"
+        }
+      ],
+      "availability_mode": "all",
+      "event_types": [
+        "pressed"
+      ],
+      "json_attributes_topic": "deskhand/abc123/shortcut_lights/attributes",
+      "name": "Lights",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "event",
+      "state_topic": "deskhand/abc123/shortcut_lights/state",
+      "unique_id": "deskhand_abc123_shortcut_lights"
+    },
+    "suspend": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/power"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "deskhand/abc123/suspend/set",
+      "name": "Suspend",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "button",
+      "unique_id": "deskhand_abc123_suspend"
+    },
+    "user_active": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/session"
+        }
+      ],
+      "availability_mode": "all",
+      "device_class": "presence",
+      "json_attributes_topic": "deskhand/abc123/user_active/attributes",
+      "name": null,
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "binary_sensor",
+      "state_topic": "deskhand/abc123/user_active/state",
+      "unique_id": "deskhand_abc123_user_active"
+    }
+  },
+  "device": {
+    "connections": [
+      [
+        "mac",
+        "aa:bb:cc:dd:ee:ff"
+      ]
+    ],
+    "hw_version": "Linux 6.18",
+    "identifiers": [
+      "deskhand_abc123"
+    ],
+    "manufacturer": "Deskhand",
+    "model": "KDE Plasma 6 on NixOS",
+    "name": "Desk",
+    "sw_version": "0.0.0-test"
+  },
+  "origin": {
+    "name": "Deskhand",
+    "support_url": "https://github.com/ryanmwright/deskhand",
+    "sw_version": "0.0.0-test"
+  }
+}

@@ -4,3 +4,7 @@
 //! ScreenSaver, notifications, MPRIS, UPower, power profiles, BlueZ, systemd,
 //! NetworkManager, portal settings, PulseAudio/PipeWire audio, camera and
 //! Wayland idle detection.
+
+pub mod identity;
+
+pub use identity::platform_identity;
