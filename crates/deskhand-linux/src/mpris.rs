@@ -30,6 +30,8 @@ const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 const NO_TRACK: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
 /// Signals arriving within this window are handled with one re-read.
 const QUIET: Duration = Duration::from_millis(100);
+/// Longest a burst of signals delays a re-read.
+const MAX_SETTLE: Duration = Duration::from_millis(500);
 
 /// Media players over MPRIS.
 #[derive(Debug)]
@@ -219,9 +221,14 @@ impl MediaSource for MprisSource {
         if !self.pending {
             self.wait().await?;
         }
-        // Coalesce bursts (a track change sends several PropertiesChanged).
+        // Coalesce bursts (a track change sends several PropertiesChanged),
+        // but not forever: some players signal continuously.
+        let deadline = tokio::time::Instant::now() + MAX_SETTLE;
         while let Ok(r) = tokio::time::timeout(QUIET, self.wait()).await {
             r?;
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
         }
         self.refresh().await;
         self.pending = false;

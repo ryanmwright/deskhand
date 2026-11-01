@@ -77,7 +77,10 @@ impl ServiceSignals {
     }
 }
 
-/// Waits for a signal, then until none arrived for `quiet`. `None` when the
+/// Waits for a signal, then until none arrived for `quiet`, but at most
+/// [`MAX_SETTLE_FACTOR`] × `quiet` (at least 1 s) after the first one: busy
+/// services (NetworkManager while scanning, BlueZ with nearby devices) send
+/// signals continuously and would otherwise never settle. `None` when the
 /// service went away or restarted, or the connection closed.
 pub async fn changed(s: &mut ServiceSignals, quiet: std::time::Duration) -> Option<()> {
     use futures_util::StreamExt;
@@ -85,14 +88,20 @@ pub async fn changed(s: &mut ServiceSignals, quiet: std::time::Duration) -> Opti
         m = s.signals.next() => { let _ = m?; }
         _ = s.owner_changes.next() => return None,
     }
+    let deadline = tokio::time::Instant::now()
+        + (quiet * MAX_SETTLE_FACTOR).max(std::time::Duration::from_secs(1));
     loop {
         tokio::select! {
             () = tokio::time::sleep(quiet) => return Some(()),
+            () = tokio::time::sleep_until(deadline) => return Some(()),
             m = s.signals.next() => { let _ = m?; }
             _ = s.owner_changes.next() => return None,
         }
     }
 }
+
+/// Upper bound of [`changed`]'s settling, in multiples of `quiet`.
+pub const MAX_SETTLE_FACTOR: u32 = 4;
 
 /// All properties of `interface` on `path`.
 pub async fn get_all(
@@ -122,4 +131,60 @@ where
         .get(key)
         .and_then(|v| v.try_clone().ok())
         .and_then(|v| T::try_from(v).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use deskhand_testkit::{TestBus, require_dbus};
+
+    use super::*;
+
+    struct Chatty;
+
+    #[zbus::interface(name = "org.example.Chatty")]
+    impl Chatty {
+        #[zbus(signal)]
+        async fn tick(e: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+    }
+
+    #[tokio::test]
+    async fn settles_even_when_signals_never_stop() {
+        require_dbus!();
+        let bus = TestBus::start().unwrap();
+        let service = zbus::connection::Builder::address(bus.session_address())
+            .unwrap()
+            .serve_at("/chatty", Chatty)
+            .unwrap()
+            .name("org.example.Chatty")
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let client = zbus::connection::Builder::address(bus.session_address())
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let mut signals = signals_from(&client, "org.example.Chatty").await.unwrap();
+        // A signal every 50 ms, forever (like NetworkManager while scanning).
+        let emitter = tokio::spawn(async move {
+            let e = zbus::object_server::SignalEmitter::new(&service, "/chatty").unwrap();
+            loop {
+                let _ = Chatty::tick(&e).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+        let quiet = Duration::from_millis(300);
+        let start = Instant::now();
+        let r = tokio::time::timeout(Duration::from_secs(5), changed(&mut signals, quiet)).await;
+        emitter.abort();
+        assert_eq!(r.expect("never settled"), Some(()));
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+    }
 }
