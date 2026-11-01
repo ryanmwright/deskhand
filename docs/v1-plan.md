@@ -240,20 +240,20 @@ Unknown keys produce warnings (via `serde_ignored`), not errors.
   is needed for tests only.
 - **Toolchain:** edition 2024, rust-version 1.95 (required by sysinfo 0.40), from nixpkgs (no overlay).
 
-## 4. Risky integration points (validated in M5)
+## 4. Risky integration points (validated in M5, see `docs/dev/spikes.md`)
 
 | Area | Primary | Fallback |
 |---|---|---|
 | Idle (Wayland) | `ext_idle_notifier_v1` (v2 `get_input_idle_notification`, so playing video doesn't count as activity), 1 s timeout + `idle_since` clock, on a dedicated thread | ScreenSaver `GetSessionIdleTime` polling (X11), then logind IdleHint |
-| Custom global shortcuts | kglobalaccel D-Bus `doRegister` + `setShortcutKeys` + `globalShortcutPressed`. No consent dialog; shows in System Settings | XDG GlobalShortcuts portal (needs `host.portal.Registry.Register` and a .desktop file). Will be the GNOME path |
-| Active window | Embedded KWin script → `loadScript`/`run` → `callDBus` back to us. **Check that the sender is the owner of org.kde.KWin**. Reload when KWin restarts | Unavailable on X11 in V1 |
-| DPMS | Off: invoke PowerDevil's "Turn Off Screen" shortcut. On: `kscreen-doctor --dpms on`. Two buttons (state can't be read) | `kscreen-doctor --dpms off` |
-| Plasma DnD | Read `Inhibited`; write with Plasma's `Inhibit`/`UnInhibit` (the cookie is released if we die) | Clear `plasmanotifyrc [DoNotDisturb]` |
+| Custom global shortcuts | kglobalaccel D-Bus `doRegister` + `setShortcutKeys` (IsDefault, then SetPresent) + `globalShortcutPressed`. No consent dialog; shows in System Settings. **Pad every key sequence to 4 ints**: a shorter array aborts KWin | XDG GlobalShortcuts portal (needs `host.portal.Registry.Register` and a .desktop file). Will be the GNOME path |
+| Active window | Embedded KWin script → `loadScript` + `/Scripting/Script<id>.run` → `callDBus` back to us with one JSON string. **Check that the sender is the owner of org.kde.KWin**. Reload when KWin restarts | Unavailable on X11 in V1 |
+| DPMS | Off: invoke PowerDevil's "Turn Off Screen" shortcut. On: `kscreen-doctor --dpms on` (needs the session's Wayland env). Two buttons; `org_kde_kwin_dpms` may allow reading the state (untested) | `kscreen-doctor --dpms off` |
+| Plasma DnD | Read `Inhibited` (covers user DnD and app inhibitions). Write `plasmanotifyrc [DoNotDisturb] Until` with a KConfig change notification (on = far future, off = delete; also ends a user-set DnD) | `Inhibit`/`UnInhibit` (released if we die; cannot end a user DnD) |
 | Night light | `inhibit`/`uninhibit`. `activateManual` only if introspection shows it | Inhibit only |
 | Dark mode / accent | Read: portal `org.freedesktop.appearance`. Write: `plasma-apply-colorscheme` | `plasma-apply-lookandfeel` |
 | Mic in use | libpulse source-outputs, excluding monitors, corked streams and ignore-listed apps | Native PipeWire (post-V1) |
 | Camera | inotify trigger + `/proc/*/fd` scan with ignore list | Open/close counting |
-| Lock | logind `LockedHint` on the resolved session; Lock/Unlock (unlock gated) | ScreenSaver `GetActive`/`ActiveChanged` |
+| Lock | logind `LockedHint` on the session from `User.Display` (fallback `GetSession("auto")`; never `GetSessionByPID` from a service); Lock/Unlock (unlock gated) | ScreenSaver `GetActive`/`ActiveChanged` |
 
 ## 5. Testing strategy
 - **Hub unit tests:** use `FakeTransport` and paused tokio time. Cover dedupe, barrier, debounce,
@@ -426,17 +426,25 @@ Dependency order:
     change state with `PropertiesChanged` and record calls.
 
 ### M5: KDE risk spikes
-- [ ] `examples/` probes run inside the VM: ext-idle-notify v2 (and its behaviour while video
+- [x] `examples/` probes run inside the VM: ext-idle-notify v2 (and its behaviour while video
       plays), KWin script callback plus sender check, kglobalaccel register/press/persist, Plasma
       DnD Inhibit semantics, DPMS off/on, libpulse mic filters, camera `/proc` scan, logind
       `session/auto` from a user service
-- [ ] Record the results in `docs/dev/spikes.md`; **amend §4 and M6–M11 of this plan if anything
+- [x] Record the results in `docs/dev/spikes.md`; **amend §4 and M6–M11 of this plan if anything
       is blocked**
 - **Accept:** every item is marked works, fallback or blocked.
+- **Status:** done. All eight work on Plasma 6.6.6; nothing is blocked. Changes made to §4 and
+  M6/M9/M10/M11:
+  - logind: resolve the session through `User.Display`.
+  - DnD: write `plasmanotifyrc` with a KConfig notification instead of `Inhibit`.
+  - kglobalaccel: pad key sequences to four ints. A short array crashed KWin in the spike.
+  - KWin script: pass one JSON string.
+  - Camera: check apps that use the camera through PipeWire on the real host.
 
 ### M6: Linux session and power
 - [ ] LinuxEnv (session and system connections, desktop detection, hostname1); lock state and
-      control (unlock gate); power buttons via `Can*`
+      control (unlock gate); power buttons via `Can*`. Session = `User.Display`, fallback
+      `GetSession("auto")` (spikes §8)
 - [ ] PrepareForSleep delay inhibitor wired through Hub Sleep/Resume to the transport; keep-awake
 - [ ] Idle providers (wayland, screensaver, logind); `session_state`; lid/docked; sleep_inhibited;
       mock tests
@@ -461,20 +469,27 @@ Dependency order:
 ### M9: Audio, camera, in-call
 - [ ] libpulse mainloop thread with subscriptions; AudioKit (volume, mute, device selects, mic,
       mic_in_use, headphones)
-- [ ] Camera inotify + `/proc` scan; `in_call` derived sensor; `audio-pulse` feature gating
+- [ ] Camera inotify + `/proc` scan (250 ms settle); `in_call` derived sensor; `audio-pulse`
+      feature gating. On the host, check camera use through PipeWire (spikes §7) and corked mic
+      streams (§6)
 - **Accept:** volume stays in sync both ways; switching output works; a browser call sets
   mic_in_use, camera_in_use and in_call, with app names.
 
 ### M10: KDE desktop part 1
-- [ ] KWin script integration (active window, fullscreen, display count, reload on KWin restart)
-- [ ] Virtual desktop select; night light; DnD; accent colour and dark mode (portal read in
-      linux, write in kde); mocks
+- [ ] KWin script integration (active window, fullscreen, display count, reload on KWin restart);
+      also connect `captionChanged`/`fullScreenChanged` of the active window (spikes §2)
+- [ ] Virtual desktop select; night light; DnD (read `Inhibited`, write `plasmanotifyrc` with
+      KConfig notify; spikes §4); accent colour and dark mode (portal read in linux, write in
+      kde); mocks
 - **Accept (VM):** entities reflect UI changes within 1 s and HA commands change the desktop.
 
 ### M11: KDE desktop part 2
 - [ ] kglobalaccel custom shortcuts → events; invoke-allowlist buttons. Use a **fixed component
-      name `"deskhand"`, not `APP_ID`**, so renaming the app id never orphans the user's key bindings
-- [ ] ScreenBrightness dynamic numbers; DPMS buttons; Plasma logout; opt-in output enable/disable
+      name `"deskhand"`, not `APP_ID`**, so renaming the app id never orphans the user's key bindings.
+      **Encode each key sequence as exactly four ints** (unit-tested); a short array aborts KWin
+      (spikes §3)
+- [ ] ScreenBrightness dynamic numbers; DPMS buttons (or a switch if `org_kde_kwin_dpms` reports
+      the state); Plasma logout; opt-in output enable/disable
 - **Accept:** a shortcut fires an HA automation and appears in System Settings; brightness works.
 
 ### M12: Setup wizard and tray
@@ -534,6 +549,7 @@ Dependency order:
 | 2026-11-01 | M2 | MQTT transport (device discovery, stale cleanup, birth, LWT, reconnect, pause, sleep), `deskhand run` with a version/start-time integration, Linux file-based identity, `just run` and `dev/ha/states.sh`. Bug found by an integration test: an aborted transport left its poll task holding the connection (no LWT); fixed |
 | 2026-11-01 | M3 | `doctor [--json]`, `print-discovery [--all]`, `uninstall` (admin MQTT client), journald priorities, sd-notify READY/STOPPING via `HubHandle::wait_released`. Scripts, command sensors, sysinfo metrics (GPU via sysinfo, sampled on its own thread because `Gpus` is not `Send`), `boot_time`, derived-sensor helpers (`Inputs`, `Debounced`). CI `release-binary` job on ubuntu-22.04 and `docs/dev/deploy-to-host.md`. Acceptance checked against the dev HA. Fixed `bootstrap.sh` re-runs. User grew the disk (95 GB free) for M4 |
 | 2026-11-01 | M4 | Plasma 6 Wayland VM (`nix/plasma-vm.nix`, `just vm`/`vm-headless`/`vm-ssh`/`vm-deploy`/`vm-screenshot`), workspace over 9p, host build as a `deskhand-dev` user service reporting to the host broker; checked by screenshot, over ssh (KWin on the bus) and in HA. `TestBus` plus logind and ScreenSaver mocks with 4 tests. Launcher unsets a host `LD_LIBRARY_PATH` that broke QEMU |
+| 2026-11-01 | M5 | Eight probes run in the VM on Plasma 6.6.6; all work (`docs/dev/spikes.md`). Plan changes: logind session via `User.Display`; DnD written through `plasmanotifyrc` + KConfig notify; kglobalaccel key sequences must be four ints (a short array aborted KWin); KWin script sends one JSON string. VM gained a v4l2loopback camera and mpv |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

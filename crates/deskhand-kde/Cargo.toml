@@ -14,5 +14,9 @@ tokio.workspace = true
 tracing.workspace = true
 zbus.workspace = true
 
+# M5 spike probes (docs/dev/spikes.md). Run them inside the Plasma VM.
+[dev-dependencies]
+futures-util.workspace = true
+
 [lints]
 workspace = true

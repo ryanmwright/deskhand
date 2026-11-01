@@ -11,6 +11,7 @@
 #
 # Development only: fixed passwords, passwordless sudo, no firewall.
 {
+  config,
   lib,
   pkgs,
   modulesPath,
@@ -122,7 +123,17 @@ in
     pulseaudio # pactl against PipeWire's pulse server
     mosquitto
     jq
+    mpv # plays lavfi test video (idle while video plays)
+    v4l-utils
+    wireplumber # wpctl
   ];
+
+  # A fake camera (/dev/video0) for the camera_in_use probe and tests.
+  boot.extraModulePackages = [ config.boot.kernelPackages.v4l2loopback ];
+  boot.kernelModules = [ "v4l2loopback" ];
+  boot.extraModprobeConfig = ''
+    options v4l2loopback devices=1 video_nr=0 card_label="Deskhand test camera" exclusive_caps=1
+  '';
 
   services.pipewire = {
     enable = true;

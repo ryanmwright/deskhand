@@ -715,6 +715,7 @@ version = "0.1.0"
 dependencies = [
  "deskhand-core",
  "deskhand-linux",
+ "futures-util",
  "tokio",
  "tracing",
  "zbus",
@@ -725,6 +726,7 @@ name = "deskhand-linux"
 version = "0.1.0"
 dependencies = [
  "deskhand-core",
+ "futures-util",
  "inotify",
  "libpulse-binding",
  "tempfile",

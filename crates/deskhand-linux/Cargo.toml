@@ -22,7 +22,13 @@ wayland-protocols.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
 tempfile.workspace = true
+
+# M5 spike probes (docs/dev/spikes.md). Run them inside the Plasma VM.
+[[example]]
+name = "mic_probe"
+required-features = ["audio-pulse"]
 
 [lints]
 workspace = true
