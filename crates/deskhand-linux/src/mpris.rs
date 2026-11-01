@@ -7,6 +7,11 @@
 //! `Seeked`) marks it dirty, and dirty players are re-read with `GetAll`
 //! after a short quiet period. Re-reading also refreshes `Position`, which
 //! MPRIS never signals while playing.
+//!
+//! Players without a usable MPRIS volume (Chromium-based browsers report a
+//! fixed 1.0) get the volume of their playback streams from the `audio`
+//! integration instead ([`crate::streams`]), matched by process, then by
+//! name.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -21,6 +26,7 @@ use zbus::zvariant::{ObjectPath, OwnedValue};
 use zbus::{Connection, MatchRule, MessageStream, Proxy};
 
 use crate::env::LinuxEnv;
+use crate::streams::{self, Playback, Streams};
 use crate::util::{Props, dbus_err, get_all, prop};
 
 pub const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
@@ -70,7 +76,9 @@ impl Integration for MediaMpris {
     async fn run(&self, ctx: Ctx) -> Result<(), IntegrationError> {
         let options = ctx.config::<MediaOptions>()?;
         let conn = self.env.session_bus().await.map_err(dbus_err)?;
-        let source = MprisSource::connect(conn).await.map_err(dbus_err)?;
+        let source = MprisSource::connect(conn, self.env.streams().clone())
+            .await
+            .map_err(dbus_err)?;
         MediaKit::new(options).run(&ctx, source).await
     }
 }
@@ -104,6 +112,8 @@ pub struct MprisSource {
     dirty: BTreeSet<String>,
     /// Something changed that the caller has not seen yet.
     pending: bool,
+    streams: Arc<Streams>,
+    stream_changes: tokio::sync::watch::Receiver<Vec<Playback>>,
 }
 
 impl std::fmt::Debug for MprisSource {
@@ -115,7 +125,7 @@ impl std::fmt::Debug for MprisSource {
 }
 
 impl MprisSource {
-    pub async fn connect(conn: Connection) -> zbus::Result<Self> {
+    pub async fn connect(conn: Connection, streams: Arc<Streams>) -> zbus::Result<Self> {
         // Subscribe before listing, so no player can slip in between.
         let owners = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
@@ -151,6 +161,8 @@ impl MprisSource {
             players,
             dirty,
             pending: true,
+            stream_changes: streams.subscribe(),
+            streams,
         })
     }
 
@@ -192,6 +204,14 @@ impl MprisSource {
             let (msg, from_owners) = tokio::select! {
                 m = self.owners.next() => (m, true),
                 m = self.signals.next() => (m, false),
+                Ok(()) = self.stream_changes.changed() => {
+                    // Only players without an MPRIS volume use the streams.
+                    if self.players.values().any(|p| p.info.volume.is_none()) {
+                        self.pending = true;
+                        return Ok(());
+                    }
+                    continue;
+                }
             };
             let msg = msg
                 .ok_or_else(|| MediaError::new("session bus connection closed"))?
@@ -211,6 +231,25 @@ impl MprisSource {
             }
             self.dirty.remove(&name);
         }
+    }
+
+    /// The players as the kit sees them: duplicates merged, stream volumes
+    /// filled in for players without an MPRIS volume.
+    fn infos(&self) -> Vec<PlayerInfo> {
+        let list = self.stream_changes.borrow().clone();
+        distinct(&self.players)
+            .into_iter()
+            .map(|p| {
+                let mut info = p.info.clone();
+                if info.volume.is_none() {
+                    info.volume = player_streams(p, &list)
+                        .iter()
+                        .map(|s| s.volume.min(1.0))
+                        .reduce(f64::max);
+                }
+                info
+            })
+            .collect()
     }
 
     fn player(&self, key: &str) -> Result<&Player, MediaError> {
@@ -243,7 +282,7 @@ impl MediaSource for MprisSource {
         }
         self.refresh().await;
         self.pending = false;
-        Ok(distinct(&self.players))
+        Ok(self.infos())
     }
 
     async fn command(&mut self, key: &str, cmd: MediaCmd) -> Result<(), MediaError> {
@@ -256,11 +295,21 @@ impl MediaSource for MprisSource {
             MediaCmd::Stop => proxy.call_method("Stop", &()).await.map(drop),
             MediaCmd::Next => proxy.call_method("Next", &()).await.map(drop),
             MediaCmd::Previous => proxy.call_method("Previous", &()).await.map(drop),
-            MediaCmd::Volume(_) if player.fixed_volume => {
-                return Err(MediaError::new(format!(
-                    "{} (Chromium-based) ignores volume changes over MPRIS",
-                    player.info.name
-                )));
+            MediaCmd::Volume(v) if player.info.volume.is_none() => {
+                let list = self.streams.current();
+                let targets = player_streams(player, &list);
+                if targets.is_empty() {
+                    return Err(MediaError::new(format!(
+                        "{} has no MPRIS volume and no audio stream was found (needs the audio integration)",
+                        player.info.name
+                    )));
+                }
+                for s in targets {
+                    self.streams
+                        .set_volume(s.index, v.clamp(0.0, 1.0))
+                        .map_err(MediaError::new)?;
+                }
+                return Ok(());
             }
             MediaCmd::Volume(v) => proxy
                 .set_property("Volume", v.clamp(0.0, 1.0))
@@ -296,7 +345,7 @@ impl MediaSource for MprisSource {
 /// `X.instance<N>` of the same process are merged, so one process with
 /// several real players (KDE Connect, one per phone app) stays separate.
 /// Names are sorted, so the shorter one is kept.
-fn distinct(players: &BTreeMap<String, Player>) -> Vec<PlayerInfo> {
+fn distinct(players: &BTreeMap<String, Player>) -> Vec<&Player> {
     let mut seen = BTreeSet::new();
     players
         .iter()
@@ -307,8 +356,19 @@ fn distinct(players: &BTreeMap<String, Player>) -> Vec<PlayerInfo> {
                 .map_or_else(|| p.owner.clone(), |pid| format!("pid:{pid}"));
             seen.insert((process, base.to_owned()))
         })
-        .map(|(_, p)| p.info.clone())
+        .map(|(_, p)| p)
         .collect()
+}
+
+/// The playback streams of a player.
+fn player_streams<'a>(p: &Player, list: &'a [Playback]) -> Vec<&'a Playback> {
+    streams::for_player(
+        list,
+        p.pid,
+        &p.info.name,
+        &p.info.app_id,
+        streams::ancestors,
+    )
 }
 
 fn new_player(name: &str, owner: &str) -> Player {
@@ -531,7 +591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chromium_volume_is_treated_as_absent() {
+    async fn chromium_volume_comes_from_its_audio_stream() {
         require_dbus!();
         let bus = TestBus::start().unwrap();
         let brave = MockMpris::start(&bus, "chromium.instance4242", "Brave")
@@ -539,12 +599,43 @@ mod tests {
             .unwrap();
         brave.set_status("Playing").await.unwrap();
         let env = LinuxEnv::with_addresses(bus.session_address(), bus.system_address(), &[]);
+        let streams = env.streams().clone();
         let (mut t, _cancel) = crate::testutil::rig(MediaMpris::new(env), "media");
         wait_attr(&mut t, &MEDIA_STATE, "player", json!("Brave")).await;
+        // No MPRIS volume and no audio stream yet.
         wait_state(&mut t, &MEDIA_VOLUME, State::Unknown).await;
+
+        // The mock player runs in this process, so a stream of this pid is
+        // Brave's; another app's stream is ignored.
+        let stream = |index: u32, pid: u32, volume: f64| Playback {
+            index,
+            app: "x".into(),
+            binary: "x".into(),
+            pid: Some(pid),
+            volume,
+            muted: false,
+        };
+        let me = std::process::id();
+        let set: Arc<std::sync::Mutex<Vec<(u32, f64)>>> = Arc::default();
+        let s = set.clone();
+        streams.attach(move |i, v| {
+            s.lock().unwrap().push((i, v));
+            true
+        });
+        streams.publish(vec![stream(7, me, 0.6), stream(8, u32::MAX, 0.1)]);
+        wait_state(&mut t, &MEDIA_VOLUME, State::Float(60.0)).await;
+
         t.command(MEDIA_VOLUME.as_str(), CommandValue::Number(30.0));
-        t.command(MEDIA_PLAY_PAUSE.as_str(), CommandValue::Press);
-        wait_call(&brave, "PlayPause").await;
+        for _ in 0..100 {
+            if !set.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(*set.lock().unwrap(), vec![(7, 0.3)]);
+        streams.publish(vec![stream(7, me, 0.3), stream(8, u32::MAX, 0.1)]);
+        wait_state(&mut t, &MEDIA_VOLUME, State::Float(30.0)).await;
+        // Never through MPRIS, which Chromium ignores.
         assert!(!brave.calls().iter().any(|c| c.starts_with("Volume")));
     }
 
@@ -575,7 +666,10 @@ mod tests {
             p.pid = pid;
             players.insert(name.to_owned(), p);
         }
-        let keys: Vec<String> = distinct(&players).into_iter().map(|p| p.key).collect();
+        let keys: Vec<String> = distinct(&players)
+            .into_iter()
+            .map(|p| p.info.key.clone())
+            .collect();
         assert_eq!(
             keys,
             [

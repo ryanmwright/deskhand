@@ -96,4 +96,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: the **follow-ups from the KDE host** (per-app volume for players without MPRIS volume), then **M12 (setup wizard and tray)**. Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.
+Next step: **M12 (setup wizard and tray)**. Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.

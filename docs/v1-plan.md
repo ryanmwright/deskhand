@@ -775,7 +775,7 @@ Dependency order:
   - `just vm-ssh` now quotes its arguments; before, `just vm-ssh 'a; b'` ran `b` on the host.
 
 ### Follow-ups from the KDE host (V1, do after M11)
-- [ ] **Per-app volume for players that ignore MPRIS volume.** Chromium-based browsers (Brave,
+- [x] **Per-app volume for players that ignore MPRIS volume.** Chromium-based browsers (Brave,
       Chrome, Edge, Vivaldi; bus name `org.mpris.MediaPlayer2.chromium.instance<N>`) report
       `Volume` 1.0 and ignore `Set` (Chromium's `DbusProperties::OnSetProperty` is
       `NOTIMPLEMENTED`); since the host fixes `media_volume` is unknown for them. Real fix:
@@ -784,6 +784,22 @@ Dependency order:
       process. Connects the `media` and `audio` integrations (a shared lookup in
       `deskhand-linux`, or an `AudioSource` command for stream volume). Pulled forward from the
       post-V1 "per-app volume" item.
+- **Status:** done, checked in the VM with Chromium 156 (from the binary cache, run from the
+  shared store) playing an mp3. Its MPRIS name belongs to the browser process (4302), and its
+  sink-input to a child process (4470). HA's `media_volume` showed the stream's 100 %, setting
+  40 % in HA set the sink-input to 40 %, and `pactl set-sink-input-volume` 70 % showed as 70 % in
+  HA.
+  - `deskhand_linux::streams::Streams` (in `LinuxEnv`) is the shared lookup. The pulse thread
+    also subscribes to sink-inputs and publishes them (`app`, `binary`, `pid`, volume, mute), and
+    attaches a setter that sends stream-volume commands to the thread (channel balance kept).
+    Detached when the audio integration stops.
+  - `media` uses the streams for any player without a usable MPRIS volume: those of its process
+    or of a child (up to 8 levels, via `/proc/<pid>/status`), else by name (`application.name` =
+    MPRIS `Identity`, or binary = app id) for sandboxed apps whose pids differ. The volume shown
+    is the loudest matching stream; setting it sets them all. Without the audio integration the
+    volume stays unknown, as before.
+  - 4 new tests: stream matching, the registry, ancestors, and the Chromium MPRIS test now
+    driving the volume through a stream.
 
 ### M12: Setup wizard and tray
 - [ ] `deskhand setup`: broker discovery in this order: mDNS `_mqtt._tcp`, then
@@ -884,6 +900,7 @@ Dependency order:
 | 2026-11-01 | M10 | KDE crate: active window via a KWin script (sender-checked callback, caption/fullscreen tracking, reload on KWin restart), virtual desktop select, night light with inhibit switch, Plasma DnD (plasmanotifyrc + KConfig notify, `Inhibit` fallback), colour scheme writer; portal `appearance` (dark mode, accent colour) in linux. All checked in the VM. Fixed: tools not found under NixOS user units' minimal PATH; KWin's desktops property has a different wire type than introspected. 12 new tests, `MockKWin`, `MockPortal` |
 | 2026-11-01 | Host fixes | From the user's KDE host: (1) D-Bus re-reads waited for a quiet gap that never came on busy services (NetworkManager scanning, BlueZ, some players), so `wifi_ssid` and media entities froze; settling is now capped. (2) Bluetooth power-on failed with "Failed" after Plasma turned Bluetooth off: Plasma soft-blocks it with rfkill; Deskhand now lifts the block through `/dev/rfkill` first. (3) Chromium-based players' fixed MPRIS volume is treated as absent. (4) VLC owns two MPRIS names and showed up twice; `X` and `X.instance<N>` of one process are merged. Per-app volume added as a V1 follow-up |
 | 2026-11-01 | M11 | KDE crate: kglobalaccel custom shortcuts (`[[shortcut]]` → `shortcut_<id>` events, four-int key encoding, stale actions removed first) and allowlisted invoke buttons, PowerDevil per-display brightness, DPMS `screens_on` switch over KWin's Wayland protocol (new spike probe) with a PowerDevil fallback button, opt-in logout and output switches. All checked in the VM, including a real key press driving an HA automation and the entry in System Settings. 19 new tests and three Plasma mocks; the kglobalaccel mock caught a `(ssss)`-instead-of-`as` action id. `just vm-ssh` quoting fixed |
+| 2026-11-01 | Follow-up | Per-app volume: shared `Streams` registry in `LinuxEnv` fed by the pulse thread (sink-inputs, stream-volume setter); MPRIS players without a usable volume (Chromium-based) use their streams, matched by process tree, then name. Checked in the VM with real Chromium. Host feedback: Bluetooth and monitor brightness confirmed |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

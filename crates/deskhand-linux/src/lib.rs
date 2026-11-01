@@ -20,6 +20,7 @@ pub mod network;
 pub mod notifications;
 pub mod power;
 pub mod rfkill;
+pub mod streams;
 pub mod systemd;
 pub mod upower;
 pub mod util;
@@ -59,7 +60,7 @@ pub fn candidates(
         Box::new(mpris::MediaMpris::new(env.clone())),
         Box::new(notifications::Notifications::new(env.clone())),
         #[cfg(feature = "audio-pulse")]
-        Box::new(audio::AudioPulse::new()),
+        Box::new(audio::AudioPulse::new(env.streams().clone())),
         Box::new(camera::Camera::new()),
         Box::new(appearance::Appearance::portal(env.clone())),
     ]

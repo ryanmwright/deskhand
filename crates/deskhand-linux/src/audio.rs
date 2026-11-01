@@ -2,10 +2,15 @@
 //! server) feeding the platform-neutral [`AudioKit`].
 //!
 //! libpulse objects are not `Send`, so a dedicated thread owns the
-//! mainloop and context. It subscribes to sink, source, source-output and
-//! server events and re-reads everything after a burst of events, sending
-//! the full [`AudioState`] to the async side. Commands go the other way
-//! through a channel the thread checks between short mainloop iterations.
+//! mainloop and context. It subscribes to sink, source, sink-input,
+//! source-output and server events and re-reads everything after a burst of
+//! events, sending the full [`AudioState`] to the async side. Commands go
+//! the other way through a channel the thread checks between short mainloop
+//! iterations.
+//!
+//! The playback streams (sink-inputs) go to the shared
+//! [`Streams`](crate::streams::Streams), which `media` uses for players
+//! without a usable MPRIS volume.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
@@ -27,6 +32,8 @@ use libpulse_binding::time::MicroSeconds;
 use libpulse_binding::volume::{ChannelVolumes, Volume};
 use tokio::sync::mpsc;
 
+use crate::streams::{Playback, Streams};
+
 /// Longest the thread blocks in the mainloop before checking for commands.
 const TICK: Duration = Duration::from_millis(50);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -34,11 +41,13 @@ const CLIENT_NAME: &str = "Deskhand";
 
 /// Audio through libpulse.
 #[derive(Debug, Default)]
-pub struct AudioPulse;
+pub struct AudioPulse {
+    streams: Arc<Streams>,
+}
 
 impl AudioPulse {
-    pub fn new() -> Self {
-        Self
+    pub fn new(streams: Arc<Streams>) -> Self {
+        Self { streams }
     }
 }
 
@@ -70,16 +79,24 @@ impl Integration for AudioPulse {
 
     async fn run(&self, ctx: Ctx) -> Result<(), IntegrationError> {
         let options = ctx.config::<AudioOptions>()?;
-        let source = PulseSource::start().map_err(IntegrationError::other)?;
+        let source = PulseSource::start(self.streams.clone()).map_err(IntegrationError::other)?;
         AudioKit::new(options).run(&ctx, source).await
     }
+}
+
+/// What the pulse thread is asked to do.
+enum ThreadCmd {
+    Audio(AudioCmd),
+    /// Sink-input index, volume (1.0 is 100 %).
+    StreamVolume(u32, f64),
 }
 
 /// The async side of the pulse thread.
 pub struct PulseSource {
     states: mpsc::UnboundedReceiver<Result<AudioState, String>>,
-    commands: std_mpsc::Sender<AudioCmd>,
+    commands: std_mpsc::Sender<ThreadCmd>,
     stop: Arc<AtomicBool>,
+    streams: Arc<Streams>,
 }
 
 impl std::fmt::Debug for PulseSource {
@@ -89,23 +106,29 @@ impl std::fmt::Debug for PulseSource {
 }
 
 impl PulseSource {
-    pub fn start() -> Result<Self, AudioError> {
+    pub fn start(streams: Arc<Streams>) -> Result<Self, AudioError> {
         let (state_tx, states) = mpsc::unbounded_channel();
         let (commands, cmd_rx) = std_mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
+        let thread_streams = streams.clone();
         std::thread::Builder::new()
             .name("deskhand-pulse".into())
             .spawn(move || {
-                if let Err(e) = pulse_thread(&state_tx, &cmd_rx, &thread_stop) {
+                if let Err(e) = pulse_thread(&state_tx, &cmd_rx, &thread_stop, &thread_streams) {
                     let _ = state_tx.send(Err(e));
                 }
+                thread_streams.detach();
             })
             .map_err(|e| AudioError(e.to_string()))?;
+        let tx = commands.clone();
+        streams
+            .attach(move |index, volume| tx.send(ThreadCmd::StreamVolume(index, volume)).is_ok());
         Ok(Self {
             states,
             commands,
             stop,
+            streams,
         })
     }
 }
@@ -113,6 +136,7 @@ impl PulseSource {
 impl Drop for PulseSource {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.streams.detach();
     }
 }
 
@@ -128,7 +152,7 @@ impl AudioSource for PulseSource {
 
     async fn command(&mut self, cmd: AudioCmd) -> Result<(), AudioError> {
         self.commands
-            .send(cmd)
+            .send(ThreadCmd::Audio(cmd))
             .map_err(|_| AudioError("pulse thread stopped".into()))
     }
 }
@@ -188,13 +212,19 @@ fn wait<T: ?Sized>(mainloop: &mut Mainloop, op: &Operation<T>) -> Result<(), Str
     Ok(())
 }
 
-/// Last known channel volumes per device, so a new level keeps the balance.
-type Volumes = HashMap<String, ChannelVolumes>;
+/// Last known channel volumes per device (by name) and per stream (by
+/// index), so a new level keeps the balance.
+#[derive(Default)]
+struct Volumes {
+    devices: HashMap<String, ChannelVolumes>,
+    streams: HashMap<u32, ChannelVolumes>,
+}
 
 fn pulse_thread(
     tx: &mpsc::UnboundedSender<Result<AudioState, String>>,
-    commands: &std_mpsc::Receiver<AudioCmd>,
+    commands: &std_mpsc::Receiver<ThreadCmd>,
     stop: &AtomicBool,
+    streams: &Streams,
 ) -> Result<(), String> {
     let (mut mainloop, mut context) = connect()?;
     tracing::debug!(server = ?context.get_server(), "connected to the sound server");
@@ -204,6 +234,7 @@ fn pulse_thread(
     let op = context.subscribe(
         InterestMaskSet::SINK
             | InterestMaskSet::SOURCE
+            | InterestMaskSet::SINK_INPUT
             | InterestMaskSet::SOURCE_OUTPUT
             | InterestMaskSet::SERVER
             | InterestMaskSet::CARD,
@@ -211,14 +242,15 @@ fn pulse_thread(
     );
     wait(&mut mainloop, &op)?;
 
-    let mut volumes = Volumes::new();
+    let mut volumes = Volumes::default();
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = commands.try_recv() {
             apply(&mut mainloop, &mut context, &volumes, &cmd)?;
             dirty.set(true);
         }
         if dirty.replace(false) {
-            let state = query(&mut mainloop, &context, &mut volumes)?;
+            let (state, playbacks) = query(&mut mainloop, &context, &mut volumes)?;
+            streams.publish(playbacks);
             if tx.send(Ok(state)).is_err() {
                 break;
             }
@@ -236,16 +268,20 @@ fn apply(
     mainloop: &mut Mainloop,
     context: &mut Context,
     volumes: &Volumes,
-    cmd: &AudioCmd,
+    cmd: &ThreadCmd,
 ) -> Result<(), String> {
     let mut introspect = context.introspect();
+    let cmd = match cmd {
+        ThreadCmd::Audio(cmd) => cmd,
+        ThreadCmd::StreamVolume(index, v) => {
+            let cv = scaled(volumes.streams.get(index), *v);
+            let op = introspect.set_sink_input_volume(*index, &cv, None);
+            return wait(mainloop, &op);
+        }
+    };
     match cmd {
         AudioCmd::Volume(dir, name, v) => {
-            let level = Volume((v * f64::from(Volume::NORMAL.0)).round() as u32);
-            let mut cv = volumes.get(name).copied().unwrap_or_default();
-            if cv.scale(level).is_none() {
-                cv.set(2, level);
-            }
+            let cv = scaled(volumes.devices.get(name), *v);
             let op = match dir {
                 Direction::Output => introspect.set_sink_volume_by_name(name, &cv, None),
                 Direction::Input => introspect.set_source_volume_by_name(name, &cv, None),
@@ -269,6 +305,16 @@ fn apply(
     }
 }
 
+/// `current` scaled so its loudest channel is at `v` (1.0 is 100 %).
+fn scaled(current: Option<&ChannelVolumes>, v: f64) -> ChannelVolumes {
+    let level = Volume((v * f64::from(Volume::NORMAL.0)).round() as u32);
+    let mut cv = current.copied().unwrap_or_default();
+    if cv.scale(level).is_none() {
+        cv.set(2, level);
+    }
+    cv
+}
+
 fn level(cv: &ChannelVolumes) -> f64 {
     f64::from(cv.max().0) / f64::from(Volume::NORMAL.0)
 }
@@ -286,10 +332,10 @@ fn query(
     mainloop: &mut Mainloop,
     context: &Context,
     volumes: &mut Volumes,
-) -> Result<AudioState, String> {
+) -> Result<(AudioState, Vec<Playback>), String> {
     let introspect = context.introspect();
     let state = Rc::new(RefCell::new(AudioState::default()));
-    let vols: Rc<RefCell<Volumes>> = Rc::default();
+    let vols: Rc<RefCell<HashMap<String, ChannelVolumes>>> = Rc::default();
     let monitors: Rc<RefCell<BTreeSet<u32>>> = Rc::default();
 
     let s = state.clone();
@@ -353,11 +399,34 @@ fn query(
     });
     wait(mainloop, &op)?;
 
-    *volumes = vols.take();
+    let playbacks: Rc<RefCell<Vec<Playback>>> = Rc::default();
+    let stream_vols: Rc<RefCell<HashMap<u32, ChannelVolumes>>> = Rc::default();
+    let (p, v) = (playbacks.clone(), stream_vols.clone());
+    let op = introspect.get_sink_input_info_list(move |r| {
+        if let ListResult::Item(i) = r {
+            let prop = |k| i.proplist.get_str(k).unwrap_or_default();
+            if prop(properties::APPLICATION_NAME) == CLIENT_NAME {
+                return;
+            }
+            v.borrow_mut().insert(i.index, i.volume);
+            p.borrow_mut().push(Playback {
+                index: i.index,
+                app: prop(properties::APPLICATION_NAME),
+                binary: prop(properties::APPLICATION_PROCESS_BINARY),
+                pid: prop(properties::APPLICATION_PROCESS_ID).parse().ok(),
+                volume: level(&i.volume),
+                muted: i.mute,
+            });
+        }
+    });
+    wait(mainloop, &op)?;
+
+    volumes.devices = vols.take();
+    volumes.streams = stream_vols.take();
     let mut out = state.take();
     // Our own client never records, but be safe against self-reporting.
     out.recordings.retain(|r| r.app != CLIENT_NAME);
-    Ok(out)
+    Ok((out, playbacks.take()))
 }
 
 #[cfg(test)]

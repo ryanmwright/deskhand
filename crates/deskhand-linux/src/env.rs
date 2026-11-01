@@ -7,6 +7,8 @@
 use std::sync::Arc;
 
 use tokio::sync::OnceCell;
+
+use crate::streams::Streams;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 
@@ -30,6 +32,7 @@ pub struct LinuxEnv {
     desktops: Vec<String>,
     session: OnceCell<Connection>,
     system: OnceCell<Connection>,
+    streams: Arc<Streams>,
 }
 
 impl LinuxEnv {
@@ -47,6 +50,7 @@ impl LinuxEnv {
             desktops,
             session: OnceCell::new(),
             system: OnceCell::new(),
+            streams: Arc::default(),
         })
     }
 
@@ -58,7 +62,13 @@ impl LinuxEnv {
             desktops: desktops.iter().map(|s| s.to_string()).collect(),
             session: OnceCell::new(),
             system: OnceCell::new(),
+            streams: Arc::default(),
         })
+    }
+
+    /// Playback streams, shared by the `audio` and `media` integrations.
+    pub fn streams(&self) -> &Arc<Streams> {
+        &self.streams
     }
 
     /// Whether `XDG_CURRENT_DESKTOP` names `desktop` (case-insensitive), e.g. `KDE`.
