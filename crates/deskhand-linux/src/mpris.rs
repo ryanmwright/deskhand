@@ -80,7 +80,18 @@ struct Player {
     owner: String,
     info: PlayerInfo,
     track_id: Option<String>,
+    /// The player reports a volume but ignores changes to it.
+    fixed_volume: bool,
+    /// Process owning the name, to merge players that own several names.
+    pid: Option<u32>,
 }
+
+/// Chromium and every browser built on it (Chrome, Brave, Edge, Vivaldi)
+/// register under this prefix. Their MPRIS `Volume` is always 1.0 and
+/// setting it is a no-op that still replies success (Chromium's
+/// `DbusProperties::OnSetProperty` is `NOTIMPLEMENTED`), so the volume is
+/// treated as absent.
+pub const CHROMIUM_PREFIX: &str = "org.mpris.MediaPlayer2.chromium.instance";
 
 /// The [`MediaSource`] for MPRIS.
 pub struct MprisSource {
@@ -232,7 +243,7 @@ impl MediaSource for MprisSource {
         }
         self.refresh().await;
         self.pending = false;
-        Ok(self.players.values().map(|p| p.info.clone()).collect())
+        Ok(distinct(&self.players))
     }
 
     async fn command(&mut self, key: &str, cmd: MediaCmd) -> Result<(), MediaError> {
@@ -245,6 +256,12 @@ impl MediaSource for MprisSource {
             MediaCmd::Stop => proxy.call_method("Stop", &()).await.map(drop),
             MediaCmd::Next => proxy.call_method("Next", &()).await.map(drop),
             MediaCmd::Previous => proxy.call_method("Previous", &()).await.map(drop),
+            MediaCmd::Volume(_) if player.fixed_volume => {
+                return Err(MediaError::new(format!(
+                    "{} (Chromium-based) ignores volume changes over MPRIS",
+                    player.info.name
+                )));
+            }
             MediaCmd::Volume(v) => proxy
                 .set_property("Volume", v.clamp(0.0, 1.0))
                 .await
@@ -274,6 +291,26 @@ impl MediaSource for MprisSource {
     }
 }
 
+/// Merges duplicate names of one player: VLC owns both `…vlc` and
+/// `…vlc.instance<pid>` (on two connections). Only `X` and
+/// `X.instance<N>` of the same process are merged, so one process with
+/// several real players (KDE Connect, one per phone app) stays separate.
+/// Names are sorted, so the shorter one is kept.
+fn distinct(players: &BTreeMap<String, Player>) -> Vec<PlayerInfo> {
+    let mut seen = BTreeSet::new();
+    players
+        .iter()
+        .filter(|(name, p)| {
+            let base = name.split(".instance").next().unwrap_or(name);
+            let process = p
+                .pid
+                .map_or_else(|| p.owner.clone(), |pid| format!("pid:{pid}"));
+            seen.insert((process, base.to_owned()))
+        })
+        .map(|(_, p)| p.info.clone())
+        .collect()
+}
+
 fn new_player(name: &str, owner: &str) -> Player {
     let suffix = name.strip_prefix(MPRIS_PREFIX).unwrap_or(name);
     // `firefox.instance_1_23` → `firefox`.
@@ -284,10 +321,18 @@ fn new_player(name: &str, owner: &str) -> Player {
         owner: owner.to_owned(),
         info,
         track_id: None,
+        fixed_volume: name.starts_with(CHROMIUM_PREFIX),
+        pid: None,
     }
 }
 
 async fn read_player(conn: &Connection, p: &mut Player) {
+    if p.pid.is_none()
+        && let Ok(dbus) = zbus::fdo::DBusProxy::new(conn).await
+        && let Ok(owner) = zbus::names::BusName::try_from(p.owner.as_str())
+    {
+        p.pid = dbus.get_connection_unix_process_id(owner).await.ok();
+    }
     let read_at = Instant::now();
     let player = match get_all(conn, &p.owner, MPRIS_PATH, PLAYER_IFACE).await {
         Ok(props) => props,
@@ -314,7 +359,9 @@ fn apply_player_props(p: &mut Player, props: &Props, read_at: Instant) {
         Some("Paused") => PlaybackStatus::Paused,
         _ => PlaybackStatus::Stopped,
     };
-    info.volume = prop::<f64>(props, "Volume").map(|v| v.clamp(0.0, 1.0));
+    info.volume = prop::<f64>(props, "Volume")
+        .filter(|_| !p.fixed_volume)
+        .map(|v| v.clamp(0.0, 1.0));
     info.rate = prop::<f64>(props, "Rate").unwrap_or(1.0);
     info.position = prop::<i64>(props, "Position")
         .filter(|us| *us >= 0)
@@ -481,5 +528,62 @@ mod tests {
         vlc.quit().await;
         wait_state(&mut t, &MEDIA_PLAYER, text("auto")).await;
         wait_attr(&mut t, &MEDIA_STATE, "player", json!("Mozilla Firefox")).await;
+    }
+
+    #[tokio::test]
+    async fn chromium_volume_is_treated_as_absent() {
+        require_dbus!();
+        let bus = TestBus::start().unwrap();
+        let brave = MockMpris::start(&bus, "chromium.instance4242", "Brave")
+            .await
+            .unwrap();
+        brave.set_status("Playing").await.unwrap();
+        let env = LinuxEnv::with_addresses(bus.session_address(), bus.system_address(), &[]);
+        let (mut t, _cancel) = crate::testutil::rig(MediaMpris::new(env), "media");
+        wait_attr(&mut t, &MEDIA_STATE, "player", json!("Brave")).await;
+        wait_state(&mut t, &MEDIA_VOLUME, State::Unknown).await;
+        t.command(MEDIA_VOLUME.as_str(), CommandValue::Number(30.0));
+        t.command(MEDIA_PLAY_PAUSE.as_str(), CommandValue::Press);
+        wait_call(&brave, "PlayPause").await;
+        assert!(!brave.calls().iter().any(|c| c.starts_with("Volume")));
+    }
+
+    #[test]
+    fn one_player_per_owner() {
+        let mut players = BTreeMap::new();
+        for (name, owner, pid) in [
+            (
+                "org.mpris.MediaPlayer2.vlc.instance1298",
+                ":1.57",
+                Some(1298),
+            ),
+            ("org.mpris.MediaPlayer2.vlc", ":1.56", Some(1298)),
+            ("org.mpris.MediaPlayer2.mpv", ":1.60", None),
+            // One process, two real players: kept apart.
+            (
+                "org.mpris.MediaPlayer2.kdeconnect.mpris_a",
+                ":1.70",
+                Some(7),
+            ),
+            (
+                "org.mpris.MediaPlayer2.kdeconnect.mpris_b",
+                ":1.70",
+                Some(7),
+            ),
+        ] {
+            let mut p = new_player(name, owner);
+            p.pid = pid;
+            players.insert(name.to_owned(), p);
+        }
+        let keys: Vec<String> = distinct(&players).into_iter().map(|p| p.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "org.mpris.MediaPlayer2.kdeconnect.mpris_a",
+                "org.mpris.MediaPlayer2.kdeconnect.mpris_b",
+                "org.mpris.MediaPlayer2.mpv",
+                "org.mpris.MediaPlayer2.vlc",
+            ]
+        );
     }
 }

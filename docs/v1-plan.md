@@ -726,6 +726,17 @@ Dependency order:
       the state); Plasma logout; opt-in output enable/disable
 - **Accept:** a shortcut fires an HA automation and appears in System Settings; brightness works.
 
+### Follow-ups from the KDE host (V1, do after M11)
+- [ ] **Per-app volume for players that ignore MPRIS volume.** Chromium-based browsers (Brave,
+      Chrome, Edge, Vivaldi; bus name `org.mpris.MediaPlayer2.chromium.instance<N>`) report
+      `Volume` 1.0 and ignore `Set` (Chromium's `DbusProperties::OnSetProperty` is
+      `NOTIMPLEMENTED`); since the host fixes `media_volume` is unknown for them. Real fix:
+      when the active player has no usable MPRIS volume, read and set the volume of its
+      PulseAudio/PipeWire stream (sink-input), matched by application name, binary or
+      process. Connects the `media` and `audio` integrations (a shared lookup in
+      `deskhand-linux`, or an `AudioSource` command for stream volume). Pulled forward from the
+      post-V1 "per-app volume" item.
+
 ### M12: Setup wizard and tray
 - [ ] `deskhand setup`: broker discovery in this order: mDNS `_mqtt._tcp`, then
       `_home-assistant._tcp` host on port 1883, then `homeassistant.local`, then localhost.
@@ -823,6 +834,7 @@ Dependency order:
 | 2026-11-01 | M9 | AudioKit (common) + libpulse thread (volume, mute, device selects, mic, `mic_in_use` with apps, headphones), camera (inotify trigger, 250 ms settle, `/proc` scan, hotplug), `in_call` derived sensor. Checked in the VM with virtual devices: volume sync both ways, output switching, mic/camera/in_call with app names. Fixed a hub bug: a select state using a new option was rejected by HA and never resent. 7 new tests. Browser call, PipeWire camera use and corked mic still to check on the KDE host |
 | 2026-11-01 | M13 (part) | Base Home Manager module pulled forward: `homeManagerModules.default` (`enable`, `package`, `settings`, `passwordFile`), a stub-based `checks.hm-module`, checked with real Home Manager in the VM. Also fixed a clippy lint that only the newer stable toolchain in CI reports (M8 push was red) |
 | 2026-11-01 | M10 | KDE crate: active window via a KWin script (sender-checked callback, caption/fullscreen tracking, reload on KWin restart), virtual desktop select, night light with inhibit switch, Plasma DnD (plasmanotifyrc + KConfig notify, `Inhibit` fallback), colour scheme writer; portal `appearance` (dark mode, accent colour) in linux. All checked in the VM. Fixed: tools not found under NixOS user units' minimal PATH; KWin's desktops property has a different wire type than introspected. 12 new tests, `MockKWin`, `MockPortal` |
+| 2026-11-01 | Host fixes | From the user's KDE host: (1) D-Bus re-reads waited for a quiet gap that never came on busy services (NetworkManager scanning, BlueZ, some players), so `wifi_ssid` and media entities froze; settling is now capped. (2) Bluetooth power-on failed with "Failed" after Plasma turned Bluetooth off: Plasma soft-blocks it with rfkill; Deskhand now lifts the block through `/dev/rfkill` first. (3) Chromium-based players' fixed MPRIS volume is treated as absent. (4) VLC owns two MPRIS names and showed up twice; `X` and `X.instance<N>` of one process are merged. Per-app volume added as a V1 follow-up |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

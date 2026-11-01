@@ -24,6 +24,7 @@ use zbus::Proxy;
 use zbus::zvariant::{OwnedObjectPath, Value};
 
 use crate::env::LinuxEnv;
+use crate::rfkill::Rfkill;
 use crate::util::{Props, changed, dbus_err, prop, signals_from};
 
 const BLUEZ: &str = "org.bluez";
@@ -153,11 +154,58 @@ impl Drop for DeviceEntity {
 #[derive(Debug)]
 pub struct Bluetooth {
     env: Arc<LinuxEnv>,
+    rfkill: Rfkill,
 }
 
 impl Bluetooth {
     pub fn new(env: Arc<LinuxEnv>) -> Self {
-        Self { env }
+        Self::with_rfkill(env, Rfkill::default())
+    }
+
+    /// Another rfkill location (tests).
+    pub fn with_rfkill(env: Arc<LinuxEnv>, rfkill: Rfkill) -> Self {
+        Self { env, rfkill }
+    }
+}
+
+/// Turns the adapter on or off. On first lifts an rfkill soft block (how
+/// Plasma turns Bluetooth off), which BlueZ would otherwise refuse with
+/// "Failed".
+async fn set_power(conn: zbus::Connection, path: OwnedObjectPath, on: bool, rfkill: Rfkill) {
+    if on && rfkill.bluetooth_soft_blocked() {
+        tracing::info!("Bluetooth is soft-blocked (rfkill); unblocking");
+        let r = rfkill.clone();
+        match tokio::task::spawn_blocking(move || r.unblock_bluetooth()).await {
+            Ok(Ok(())) => {
+                for _ in 0..40 {
+                    if !rfkill.bluetooth_soft_blocked() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                // BlueZ notices the unblock asynchronously.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, dev = %rfkill.dev.display(), "cannot lift the rfkill block")
+            }
+            Err(e) => tracing::warn!(error = %e, "rfkill task failed"),
+        }
+    }
+    let proxy = match Proxy::new(&conn, BLUEZ, path, ADAPTER_IFACE).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "Bluetooth adapter proxy failed");
+            return;
+        }
+    };
+    let mut result = proxy.set_property("Powered", Value::from(on)).await;
+    if on && result.is_err() {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        result = proxy.set_property("Powered", Value::from(on)).await;
+    }
+    if let Err(e) = result {
+        tracing::warn!(error = ?e, on, "setting Bluetooth power failed");
     }
 }
 
@@ -276,14 +324,7 @@ impl Integration for Bluetooth {
                     let Some(on) = cmd else { return Ok(()) };
                     let Some((path, _)) = &reading.adapter else { continue };
                     tracing::info!(on, "Bluetooth power from Home Assistant");
-                    match Proxy::new(&conn, BLUEZ, path.clone(), ADAPTER_IFACE).await {
-                        Ok(p) => {
-                            if let Err(e) = p.set_property("Powered", Value::from(on)).await {
-                                tracing::warn!(error = %e, "setting Bluetooth power failed");
-                            }
-                        }
-                        Err(e) => tracing::warn!(error = %e, "Bluetooth adapter proxy failed"),
-                    }
+                    tokio::spawn(set_power(conn.clone(), path.clone(), on, self.rfkill.clone()));
                 }
                 Some((address, on)) = dev_rx.recv() => {
                     let Some(d) = reading.devices.iter().find(|d| d.address == address) else { continue };
@@ -376,6 +417,49 @@ mod tests {
         // A device that disappears is removed.
         bluez.remove_device(HEADSET).await.unwrap();
         wait_entity(&mut t, &headset, false).await;
+    }
+
+    #[tokio::test]
+    async fn power_on_lifts_an_rfkill_block() {
+        require_dbus!();
+        let bus = TestBus::start().unwrap();
+        // Bluetooth turned off in Plasma: powered off and soft-blocked.
+        let bluez = MockBluez::start(&bus, false).await.unwrap();
+        bluez.set_blocked(true);
+        let dir = tempfile::tempdir().unwrap();
+        let radio = dir.path().join("rfkill1");
+        std::fs::create_dir_all(&radio).unwrap();
+        std::fs::write(radio.join("type"), "bluetooth\n").unwrap();
+        std::fs::write(radio.join("soft"), "1\n").unwrap();
+        let dev = dir.path().join("dev-rfkill");
+        std::fs::write(&dev, b"").unwrap();
+        // Plays the kernel: an unblock event written to the device lifts the block.
+        let kernel = {
+            let (dev, radio, bluez) = (dev.clone(), radio.clone(), bluez.clone());
+            tokio::spawn(async move {
+                loop {
+                    if std::fs::read(&dev).unwrap_or_default()
+                        == crate::rfkill::change_all_event(false)
+                    {
+                        std::fs::write(radio.join("soft"), "0\n").unwrap();
+                        bluez.set_blocked(false);
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+        };
+        let env = LinuxEnv::with_addresses(bus.session_address(), bus.system_address(), &[]);
+        let rfkill = Rfkill {
+            sys: dir.path().into(),
+            dev,
+        };
+        let (mut t, _cancel) = rig(Bluetooth::with_rfkill(env, rfkill), "bluetooth");
+        wait_state(&mut t, &BLUETOOTH_POWER, State::Bool(false)).await;
+        t.command("bluetooth_power", CommandValue::Bool(true));
+        wait_state(&mut t, &BLUETOOTH_POWER, State::Bool(true)).await;
+        kernel.await.unwrap();
+        assert!(bluez.powered());
     }
 
     #[tokio::test]

@@ -19,6 +19,7 @@ pub mod mpris;
 pub mod network;
 pub mod notifications;
 pub mod power;
+pub mod rfkill;
 pub mod systemd;
 pub mod upower;
 pub mod util;

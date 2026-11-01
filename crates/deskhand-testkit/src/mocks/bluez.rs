@@ -23,6 +23,8 @@ struct DeviceState {
 #[derive(Debug, Default)]
 struct State {
     powered: bool,
+    /// Soft-blocked by rfkill: powering on fails like real BlueZ.
+    blocked: bool,
     devices: BTreeMap<String, DeviceState>,
     calls: Vec<String>,
 }
@@ -46,15 +48,19 @@ impl Adapter {
     }
 
     #[zbus(property)]
-    async fn set_powered(&mut self, on: bool) {
+    async fn set_powered(&mut self, on: bool) -> zbus::fdo::Result<()> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(format!("Powered={on}"));
+        if on && s.blocked {
+            return Err(zbus::fdo::Error::Failed("Blocked through rfkill".into()));
+        }
         s.powered = on;
         if !on {
             for d in s.devices.values_mut() {
                 d.connected = false;
             }
         }
+        Ok(())
     }
 
     #[zbus(property)]
@@ -181,6 +187,11 @@ impl MockBluez {
 
     pub fn calls(&self) -> Vec<String> {
         self.state.lock().unwrap().calls.clone()
+    }
+
+    /// rfkill soft block on or off (as Plasma's Bluetooth toggle does).
+    pub fn set_blocked(&self, blocked: bool) {
+        self.state.lock().unwrap().blocked = blocked;
     }
 
     pub fn powered(&self) -> bool {
