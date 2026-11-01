@@ -707,6 +707,16 @@ Dependency order:
     `passwordFile`, and HA showed the device under the module's name. `deskhand doctor` with
     no `--config` used the linked config.
   - Still in M13: `tray`, the `.desktop` file and icon, and the `kde-e2e` NixOS test.
+  - **Binary cache CI (decide in M13):** the user's ncps cache is internal only, so GitHub-hosted
+    CI cannot push to it. Preferred direction: mirror the GitHub repo into the user's Forgejo
+    (pull mirror) and build there with an instance-level Forgejo runner on a NixOS host whose
+    `post-build-hook` pushes to ncps (`allow-put-verb`, builds signed with the user's key).
+    Current Forgejo source turns a pull-mirror sync into a `push` event for Actions
+    (`SyncPushCommits`); it runs on the mirror interval, needs Actions enabled on the mirror,
+    and never sees `pull_request`. Verify on the user's Forgejo version first. Alternatives: a
+    self-hosted GitHub runner (per-repo for personal accounts; restrict to `push` on `main`,
+    since the repo is public), or buildbot-nix. Also consider crane so updates only rebuild
+    workspace crates.
   - Disk: a second release build of the package in a flake with a different nixpkgs pin
     filled the disk (17 GB free before). Make test flakes follow `deskhand/nixpkgs` so they
     reuse the package.
