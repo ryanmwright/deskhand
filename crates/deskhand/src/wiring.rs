@@ -80,9 +80,17 @@ impl Setup {
         #[cfg(feature = "linux")]
         {
             let env = deskhand_linux::LinuxEnv::from_env();
+            let units = self
+                .config
+                .integration("systemd")
+                .ok()
+                .and_then(|c| c.options::<deskhand_linux::systemd::SystemdOptions>().ok())
+                .map(|p| p.value.units)
+                .unwrap_or_default();
             list.extend(deskhand_linux::candidates(
                 &env,
                 self.general.idle_threshold,
+                units,
             ));
         }
         list

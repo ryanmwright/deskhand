@@ -492,12 +492,49 @@ Dependency order:
     had been published). It failed in CI on the M5 push.
 
 ### M7: Linux hardware and services
-- [ ] UPower (battery, AC, dynamic peripherals); power-profile select; NetworkManager SSID and
+- [x] UPower (battery, AC, dynamic peripherals); power-profile select; NetworkManager SSID and
       connectivity
-- [ ] systemd unit switches (allowlist, Subscribe); BlueZ adapter and dynamic devices
+- [x] systemd unit switches (allowlist, Subscribe); BlueZ adapter and dynamic devices
       (ObjectManager); GameMode; mocks
 - **Accept:** mock tests pass; on the host, a BT device appears and its switch works, and a
   systemd unit stays in sync.
+- **Status:** done except the Bluetooth hardware check:
+  - Mock tests pass for every integration (9 new, including dynamic add/remove for UPower
+    peripherals and BlueZ devices).
+  - **systemd** was checked in the VM against the real user manager. HA's switch started and
+    stopped `deskhand-test.service`, and starting or stopping it with `systemctl` was reflected
+    in HA within 3 s.
+  - **Power profile:** HA's select set power-profiles-daemon in the VM. The opposite direction
+    is covered by the mock test; the VM has no `performance` profile to switch to.
+  - **Bluetooth: not checked on hardware.** This dev host and the VM have no adapter. Check on
+    the KDE host: a paired device appears, and its switch connects and disconnects.
+- **Notes and deviations:**
+  - Capabilities and entities:
+    - `battery` (`battery_level`, `battery_state`, `battery_time_remaining` in min,
+      `on_ac_power`, all only when UPower's display device is a present battery; plus dynamic
+      `battery_<model>` sensors for peripherals with `kind`/`state` attributes).
+    - `power_profile` select (`org.freedesktop.UPower.PowerProfiles`, falling back to
+      `net.hadess.PowerProfiles`).
+    - `network` (`network_connectivity` enum; `wifi_ssid` with `signal` and `interface`
+      attributes, only with a Wi-Fi device).
+    - `bluetooth` (`bluetooth_power` switch; dynamic `bt_<mac>` switches with `address`,
+      `paired`, `battery` attributes; `devices = "paired"` or a list of addresses).
+    - `systemd` (`systemd_<unit>` switches; the `.service` suffix is dropped from the id, other
+      unit types keep it).
+    - `gamemode` (`gamemode_active`, attribute `clients`; available when GameMode is
+      installed, since it is D-Bus activated).
+  - UPower, NetworkManager, BlueZ and systemd treat *any* signal from the service as "re-read
+    everything" (debounced 0.25–1 s) instead of tracking individual properties. This covers
+    objects appearing and disappearing. The match rule uses the service's **unique** name (zbus
+    compares senders by unique name; a well-known name never matched), and a
+    `NameOwnerChanged` ends the stream, so the integration restarts when the service does.
+  - Dynamic entities are dropped when their object disappears and unregister after the hub's
+    grace period. Bluetooth device switches abort their command-forwarding task on removal,
+    so the command stream doesn't keep the entity alive.
+  - Bluetooth connect/disconnect calls run in their own task, because connecting can take
+    seconds.
+  - `deskhand-linux` tests share a `TestRig` that remembers the latest published states.
+    Waiting on single events missed values that arrived together in the startup snapshot.
 
 ### M8: Notifications and MPRIS media
 - [ ] notify entity; rich JSON topic; action and reply events; tag → replaces_id
@@ -591,6 +628,7 @@ Dependency order:
 | 2026-11-01 | M4 | Plasma 6 Wayland VM (`nix/plasma-vm.nix`, `just vm`/`vm-headless`/`vm-ssh`/`vm-deploy`/`vm-screenshot`), workspace over 9p, host build as a `deskhand-dev` user service reporting to the host broker; checked by screenshot, over ssh (KWin on the bus) and in HA. `TestBus` plus logind and ScreenSaver mocks with 4 tests. Launcher unsets a host `LD_LIBRARY_PATH` that broke QEMU |
 | 2026-11-01 | M5 | Eight probes run in the VM on Plasma 6.6.6; all work (`docs/dev/spikes.md`). Plan changes: logind session via `User.Display`; DnD written through `plasmanotifyrc` + KConfig notify; kglobalaccel key sequences must be four ints (a short array aborted KWin); KWin script sends one JSON string. VM gained a v4l2loopback camera and mpv |
 | 2026-11-01 | M6 | LinuxEnv (`User.Display` session); lock (logind/ScreenSaver, unlock gate), power (Can*-gated buttons, delay inhibitor + PrepareSleep/Sleep/Resume, power_event, lid/dock, sleep_inhibited), keep_awake, idle (Wayland v2 thread, ScreenSaver poll, logind), `session_state`. 12 new mock/unit tests and a sleep/resume broker test. Fixed: transport never sent offline/DISCONNECT on sleep; flaky uninstall broker test (CI red on the M5 push). VM checks passed except resume: the QEMU guest never wakes, so resume is covered by the broker test and still needs a check on the real host |
+| 2026-11-01 | M7 | UPower battery/AC/dynamic peripheral batteries, power-profile select, NetworkManager connectivity and SSID, BlueZ adapter and dynamic device switches, systemd user-unit switches (allowlist), GameMode; mocks for all six services and 9 tests. systemd and power profile checked in the VM; Bluetooth needs a check on the KDE host (no adapter here). Signal matching uses the service's unique name, with a restart when the owner changes |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

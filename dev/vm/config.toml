@@ -10,3 +10,8 @@ log = "info,deskhand_mqtt=debug"
 host = "10.0.2.2"
 username = "deskhand"
 password = "deskhand-dev"
+
+# A test unit for the systemd switch. Create it in the VM:
+# ~/.config/systemd/user/deskhand-test.service with ExecStart=sleep infinity.
+[integrations.systemd]
+units = ["deskhand-test.service"]
