@@ -30,9 +30,12 @@ You can expect an answer within a week.
   turns it into a lock that can also unlock: anyone with access to Home
   Assistant (or able to publish to the broker) could then unlock your session.
   Only enable it if that is acceptable.
-- **Opt-in for disruptive actions.** Logging out (ends the session without
-  asking, so unsaved work is lost) and turning outputs off are off unless
-  enabled.
+- **Opt-in for disruptive actions.** Home Assistant gets no power buttons
+  unless you list them in `[integrations.power] buttons` (`deskhand setup`
+  asks): suspend, hibernate, restart, shut down and log out can all interrupt
+  you, and restart, shut down and log out can lose unsaved work. Turning
+  outputs off is opt-in too. Locking the screen is always available; it loses
+  nothing.
 - **Retained commands are ignored**, so a stale "shut down" message left on
   the broker never fires when Deskhand connects.
 - Deskhand runs as your user with your permissions; it needs no root.

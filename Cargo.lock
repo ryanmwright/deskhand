@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -736,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand-kde"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "deskhand-common",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand-linux"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand-mqtt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "deskhand-testkit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "deskhand-core",
  "futures-util",

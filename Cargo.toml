@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -18,12 +18,12 @@ all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 # Internal crates
-deskhand-core = { path = "crates/deskhand-core", version = "0.1.0" }
-deskhand-mqtt = { path = "crates/deskhand-mqtt", version = "0.1.0" }
-deskhand-common = { path = "crates/deskhand-common", version = "0.1.0" }
-deskhand-linux = { path = "crates/deskhand-linux", version = "0.1.0", default-features = false }
-deskhand-kde = { path = "crates/deskhand-kde", version = "0.1.0" }
-deskhand-testkit = { path = "crates/deskhand-testkit", version = "0.1.0" }
+deskhand-core = { path = "crates/deskhand-core", version = "0.1.1" }
+deskhand-mqtt = { path = "crates/deskhand-mqtt", version = "0.1.1" }
+deskhand-common = { path = "crates/deskhand-common", version = "0.1.1" }
+deskhand-linux = { path = "crates/deskhand-linux", version = "0.1.1", default-features = false }
+deskhand-kde = { path = "crates/deskhand-kde", version = "0.1.1" }
+deskhand-testkit = { path = "crates/deskhand-testkit", version = "0.1.1" }
 
 # Runtime
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "signal", "time", "process", "fs", "sync", "net", "io-util"] }

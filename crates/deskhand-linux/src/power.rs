@@ -42,23 +42,16 @@ const PREPARE_GRACE: Duration = Duration::from_millis(300);
 const DISCONNECT_GRACE: Duration = Duration::from_millis(1200);
 
 /// `[integrations.power]` options.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct PowerOptions {
     /// Buttons to offer, if logind allows them: suspend, hibernate,
     /// hybrid_sleep, suspend_then_hibernate, reboot, poweroff. `logout` is
     /// offered by the desktop backend (KDE), not here.
+    ///
+    /// None by default: Home Assistant powering the computer down is
+    /// opt-in, like remote unlock and logout (`deskhand setup` asks).
     pub buttons: Vec<String>,
-}
-
-impl Default for PowerOptions {
-    fn default() -> Self {
-        Self {
-            buttons: ["suspend", "hibernate", "reboot", "poweroff"]
-                .map(String::from)
-                .to_vec(),
-        }
-    }
 }
 
 /// (config name, Can* method, action method, entity id, label, icon, device class)
@@ -514,11 +507,17 @@ mod tests {
     }
 
     async fn rig(integration: impl Integration, capability: &str) -> Rig {
+        rig_with(integration, IntegrationConfig::new(capability)).await
+    }
+
+    async fn rig_with(integration: impl Integration, config: IntegrationConfig) -> Rig {
+        let capability = config.capability.to_string();
+        let capability = capability.as_str();
         let (hub, handle, link) = Hub::new(HubOptions::default());
         tokio::spawn(hub.run());
         let t = FakeTransport::new(link);
         let cancel = CancellationToken::new();
-        let ctx = handle.ctx(IntegrationConfig::new(capability), cancel.clone());
+        let ctx = handle.ctx(config, cancel.clone());
         handle.integration_started(capability);
         tokio::spawn(async move { integration.run(ctx).await.unwrap() });
         handle.startup_complete();
@@ -540,6 +539,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn no_power_buttons_by_default() {
+        // Home Assistant powering the computer down is opt-in.
+        assert!(PowerOptions::default().buttons.is_empty());
+    }
+
     #[tokio::test]
     async fn buttons_follow_can_and_sleep_is_handled_in_order() {
         require_dbus!();
@@ -548,7 +553,14 @@ mod tests {
         logind.set_can("Hibernate", "no");
         logind.set_lid_closed(false).await.unwrap();
         let env = LinuxEnv::with_addresses(bus.session_address(), bus.system_address(), &[]);
-        let mut r = rig(PowerLogind::new(env).with_lid(true), "power").await;
+        let config = deskhand_core::Config::from_toml_str(
+            "[integrations.power]\nbuttons = [\"suspend\", \"hibernate\", \"reboot\", \"poweroff\"]",
+            None,
+        )
+        .unwrap()
+        .integration("power")
+        .unwrap();
+        let mut r = rig_with(PowerLogind::new(env).with_lid(true), config).await;
         let snap = snapshot(&mut r.t).await;
         let ids: Vec<&str> = snap.entities.iter().map(|d| d.spec.id.as_str()).collect();
         assert!(ids.contains(&"suspend") && ids.contains(&"reboot") && ids.contains(&"power_off"));

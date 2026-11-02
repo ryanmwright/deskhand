@@ -33,8 +33,8 @@ unavailable except `session_state` and `deskhand_connected`, which keep showing
 
 | Id | Type | |
 |---|---|---|
-| `suspend`, `hibernate`, `hybrid_sleep`, `suspend_then_hibernate`, `reboot`, `power_off` | buttons | Those in `power.buttons` that the system allows. |
-| `logout` | button | KDE, opt-in: ends the session without asking. |
+| `suspend`, `hibernate`, `hybrid_sleep`, `suspend_then_hibernate`, `reboot`, `power_off` | buttons | Only those listed in `power.buttons` (none by default) that the system allows. |
+| `logout` | button | KDE, opt-in (`"logout"` in `power.buttons`): ends the session without asking. |
 | `on_ac_power` | binary sensor | |
 | `battery_level`, `battery_state`, `battery_time_remaining` | sensors | Laptops (UPower). Time in minutes. |
 | `battery_<model>` | sensors | Batteries of mice, keyboards, headsets; appear while connected. Attributes `kind`, `state`. |

@@ -50,7 +50,20 @@ pub struct Options {
     /// Overwrite an existing config (a copy is kept as config.toml.bak).
     #[arg(long)]
     pub force: bool,
+    /// Power buttons Home Assistant may press, comma-separated: suspend,
+    /// hibernate, reboot, poweroff, logout [default: none].
+    #[arg(long, value_delimiter = ',')]
+    pub power_buttons: Vec<String>,
 }
+
+/// Power buttons setup offers: config name and question label.
+pub const POWER_BUTTONS: &[(&str, &str)] = &[
+    ("suspend", "Suspend"),
+    ("hibernate", "Hibernate"),
+    ("reboot", "Restart"),
+    ("poweroff", "Shut down"),
+    ("logout", "Log out (KDE; ends the session without asking)"),
+];
 
 /// What the wizard collected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +75,8 @@ pub struct Answers {
     pub username: Option<String>,
     pub password: Option<String>,
     pub name: Option<String>,
+    /// `[integrations.power] buttons`; empty means none.
+    pub power_buttons: Vec<String>,
 }
 
 impl Answers {
@@ -106,6 +121,14 @@ pub fn render_config(a: &Answers, password_file: Option<&Path>) -> String {
     }
     if let Some(ca) = &a.ca_file {
         out += &format!("ca_file = {}\n", quoted(&ca.display().to_string()));
+    }
+    if !a.power_buttons.is_empty() {
+        let list: Vec<String> = a.power_buttons.iter().map(|b| quoted(b)).collect();
+        out += &format!(
+            "\n# Power buttons Home Assistant may press (none by default).\n\
+             [integrations.power]\nbuttons = [{}]\n",
+            list.join(", ")
+        );
     }
     out
 }
@@ -482,6 +505,13 @@ fn answers_from_flags(o: &Options) -> anyhow::Result<Answers> {
     } else {
         None
     };
+    for b in &o.power_buttons {
+        if !POWER_BUTTONS.iter().any(|(name, _)| name == b) {
+            bail!(
+                "--power-buttons: unknown button {b:?} (suspend, hibernate, reboot, poweroff, logout)"
+            );
+        }
+    }
     Ok(Answers {
         host,
         port: o.port.unwrap_or(if o.tls { 8883 } else { 1883 }),
@@ -490,13 +520,14 @@ fn answers_from_flags(o: &Options) -> anyhow::Result<Answers> {
         username: o.username.clone(),
         password,
         name: o.name.clone(),
+        power_buttons: o.power_buttons.clone(),
     })
 }
 
 /// Prompts for everything. `defaults` pre-fills the answers (after a failed
 /// connection test).
 async fn ask(defaults: Option<&Answers>) -> anyhow::Result<Answers> {
-    use inquire::{Confirm, Password, PasswordDisplayMode, Select, Text};
+    use inquire::{Confirm, MultiSelect, Password, PasswordDisplayMode, Select, Text};
 
     let (host, port) = match defaults {
         Some(d) => {
@@ -573,6 +604,24 @@ async fn ask(defaults: Option<&Answers>) -> anyhow::Result<Answers> {
     let name = Text::new("Device name in Home Assistant:")
         .with_default(&default_name)
         .prompt()?;
+    let labels: Vec<&str> = POWER_BUTTONS.iter().map(|(_, l)| *l).collect();
+    let preselected: Vec<usize> = POWER_BUTTONS
+        .iter()
+        .enumerate()
+        .filter(|(_, (b, _))| defaults.is_some_and(|d| d.power_buttons.iter().any(|x| x == b)))
+        .map(|(i, _)| i)
+        .collect();
+    let chosen = MultiSelect::new(
+        "Which power buttons may Home Assistant press? (none is fine)",
+        labels,
+    )
+    .with_default(&preselected)
+    .with_help_message("Space selects, Enter confirms. Lock screen is always available")
+    .raw_prompt()?;
+    let power_buttons = chosen
+        .iter()
+        .map(|o| POWER_BUTTONS[o.index].0.to_owned())
+        .collect();
     Ok(Answers {
         host,
         port,
@@ -581,6 +630,7 @@ async fn ask(defaults: Option<&Answers>) -> anyhow::Result<Answers> {
         username,
         password,
         name: Some(name).filter(|n| !n.is_empty() && *n != device_default_name()),
+        power_buttons,
     })
 }
 
@@ -691,6 +741,7 @@ mod tests {
             username: Some("desk\"hand".into()),
             password: Some("pw".into()),
             name: Some("Office PC".into()),
+            power_buttons: vec!["suspend".into(), "reboot".into()],
         }
     }
 
@@ -718,6 +769,17 @@ mod tests {
             config.device().unwrap().value.name.as_deref(),
             Some("Office PC")
         );
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct Power {
+            buttons: Vec<String>,
+        }
+        let power = config
+            .integration("power")
+            .unwrap()
+            .options::<Power>()
+            .unwrap();
+        assert!(power.unknown_keys.is_empty());
+        assert_eq!(power.value.buttons, vec!["suspend", "reboot"]);
 
         // Saving again keeps a backup.
         let backup = save(
@@ -750,12 +812,16 @@ mod tests {
             username: None,
             password: None,
             name: None,
+            power_buttons: Vec::new(),
             ..answers()
         };
         let text = render_config(&a, None);
         assert!(text.contains("tls = true\nca_file = \"/etc/ca.pem\"\n"));
         assert!(
-            !text.contains("username") && !text.contains("password") && !text.contains("[device]")
+            !text.contains("username")
+                && !text.contains("password")
+                && !text.contains("[device]")
+                && !text.contains("[integrations.power]")
         );
     }
 

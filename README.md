@@ -26,7 +26,8 @@ A device in Home Assistant with, depending on your desktop and hardware:
 - **Audio:** volume, mute, output and input device.
 - **Notifications** from Home Assistant, with buttons and replies that come back
   as events ("Doorbell — [Unlock] [Ignore]").
-- **Power:** suspend, restart, shut down, battery, power profile.
+- **Power:** battery, power profile, and, if you allow them, suspend, restart
+  and shut down buttons.
 - **KDE Plasma:** active window, virtual desktop, Do not disturb, night light,
   dark mode, per-monitor brightness, screens on/off, and global keyboard
   shortcuts that trigger Home Assistant automations.
@@ -99,8 +100,9 @@ services.deskhand = {
 deskhand setup
 ```
 
-It looks for the broker on your network, asks for the username and password,
-tests the connection, writes `~/.config/deskhand/config.toml` (the password goes
+It looks for the broker on your network, asks for the username and password
+and which power buttons (suspend, restart, shut down; none by default) Home
+Assistant may press, tests the connection, writes `~/.config/deskhand/config.toml` (the password goes
 to a separate private file) and installs and starts a systemd user service that
 runs whenever you are logged in to your desktop.
 

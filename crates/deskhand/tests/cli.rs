@@ -193,6 +193,29 @@ fn setup_without_prompts_writes_a_private_config() {
     setup(&["--skip-test"]).assert().failure();
     setup(&["--skip-test", "--force"]).assert().success();
     assert!(path.with_extension("toml.bak").exists());
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("[integrations.power]")
+    );
+
+    // Power buttons are opt-in, and only known ones are accepted.
+    setup(&["--skip-test", "--force", "--power-buttons", "reboot,bogus"])
+        .assert()
+        .failure();
+    setup(&[
+        "--skip-test",
+        "--force",
+        "--power-buttons",
+        "suspend,poweroff",
+    ])
+    .assert()
+    .success();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("buttons = [\"suspend\", \"poweroff\"]")
+    );
 
     // The daemon's own tools accept it.
     let out = deskhand()

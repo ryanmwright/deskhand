@@ -5,10 +5,17 @@ All notable changes to Deskhand. The format follows
 [Semantic Versioning](https://semver.org/). The release workflow uses the
 section of the tagged version as the release notes.
 
-## [0.1.0] - 2026-11-01
+## [0.1.1] - 2026-11-01
 
 The first release: KDE Plasma 6 on Linux, with the generic Linux integrations
 working on other desktops too.
+
+### Changed (from the unpublished 0.1.0)
+
+- **No power buttons by default.** Home Assistant can only suspend, hibernate,
+  restart, shut down or log out the computer when you list those buttons in
+  `[integrations.power] buttons`. `deskhand setup` asks which ones
+  (`--power-buttons` without prompts). Locking the screen stays available.
 
 ### Added
 
@@ -42,4 +49,8 @@ working on other desktops too.
   Pause.
 - Nix flake: package, Home Manager module, NixOS VM end-to-end test.
 
-[0.1.0]: https://github.com/ryanmwright/deskhand/releases/tag/v0.1.0
+## [0.1.0] - 2026-11-01
+
+Tagged but not published; everything in it is in 0.1.1.
+
+[0.1.1]: https://github.com/ryanmwright/deskhand/releases/tag/v0.1.1

@@ -112,14 +112,15 @@ them accept `enabled`:
 enabled = false      # don't publish the focused window at all
 ```
 
-Two capabilities are off unless you opt in: `logout` (add `"logout"` to
-`power.buttons`) and `outputs` (`enabled = true`).
+Power buttons and two capabilities are off unless you opt in: the power
+buttons (list them in `power.buttons`), `logout` (add `"logout"` there too)
+and `outputs` (`enabled = true`).
 
 The other options, by capability:
 
 | Capability | Option | Default | |
 |---|---|---|---|
-| `power` | `buttons` | `["suspend", "hibernate", "reboot", "poweroff"]` | Power buttons to offer, if the system allows them. Also `hybrid_sleep`, `suspend_then_hibernate` and `logout` (KDE, ends the session without asking). |
+| `power` | `buttons` | `[]` (none) | Power buttons Home Assistant may press, if the system allows them: `suspend`, `hibernate`, `hybrid_sleep`, `suspend_then_hibernate`, `reboot`, `poweroff`, and `logout` (KDE, ends the session without asking). `deskhand setup` asks which. |
 | `lock` | `allow_remote_unlock` | `false` | `false`: a **Lock screen** button only. `true`: a lock entity that Home Assistant can also unlock with. See [SECURITY.md](../SECURITY.md). |
 | `active_window` | `publish_title` | `true` | `false` keeps window titles (which can contain document names, chat partners, URLs) out of Home Assistant. |
 | `media` | `ignore_players` | `[]` | Media players to leave out, by name or app id (`"firefox"`, `"kdeconnect"`), ignoring case. |
