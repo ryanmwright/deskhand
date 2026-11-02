@@ -5,7 +5,7 @@ All notable changes to Deskhand. The format follows
 [Semantic Versioning](https://semver.org/). The release workflow uses the
 section of the tagged version as the release notes.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-01
 
 The first release: KDE Plasma 6 on Linux, with the generic Linux integrations
 working on other desktops too.
