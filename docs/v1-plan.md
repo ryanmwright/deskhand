@@ -974,6 +974,60 @@ Dependency order:
     runs, and new processes then segfault (`ld.so` assertion); `just vm-deploy` now stops the
     service and drops the guest's caches before starting it.
 
+### M15 (post-V1): Headless mode and herdr
+Context (2026-11-02, with the user): the user runs coding agents in
+[herdr](https://github.com/herdrdev/herdr) on headless dev VMs and attaches with
+`herdr --remote <vm>` from more than one client machine. The herdr server, and so the agents'
+state, lives on each VM. So Deskhand runs **on each VM** (one HA device per VM, the same no
+matter which client is attached); a desktop-side herdr integration only matters for agents
+run locally.
+
+- [ ] **Headless mode.** A user unit wanted by `default.target` (not
+      `graphical-session.target`), plus `loginctl enable-linger` so it runs without a login:
+      `deskhand setup --headless` (asks to enable lingering; polkit may need sudo) and the HM
+      module (`services.deskhand.headless`).
+- [ ] **Headless defaults.** `doctor` on the (non-KDE) dev host, outside a graphical session,
+      showed that probing alone is not enough: besides metrics, `lock` and `idle` (logind, would
+      follow ssh sessions), `power`, `keep_awake`, `session_state`, `in_call`, `media` (MPRIS only
+      needs a session bus, which lingering provides), `camera` (only needs `/proc` and `/dev`),
+      and, where a notification daemon or sound server runs, `notifications` and `audio` all
+      start. With `[general] headless = true` (set by `setup --headless` and the HM option), these
+      session/desktop capabilities and the KDE ones default to off instead of `auto`;
+      `enabled = true` still turns one on (e.g. `power` for VM reboot buttons). Expected result
+      on a VM: deskhand info, metrics, herdr, and configured systemd units, scripts and sensors.
+      Consider a build with `--no-default-features --features linux,herdr` (no libpulse, no
+      tray) for VMs.
+- [ ] **`herdr` integration** (platform-neutral, `deskhand-common` or its own crate, feature
+      `herdr`). herdr's socket API (docs: herdr.dev/docs/socket-api/):
+      - Socket `~/.config/herdr/herdr.sock` (or `sessions/<name>/herdr.sock`; resolution
+        `--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default). Newline-delimited JSON:
+        `{"id":"req_1","method":"ping","params":{}}` → `{"id":"req_1","result":{...}}` or
+        `{"id":...,"error":{"code":...,"message":...}}`.
+      - Push: `events.subscribe` with `subscriptions: [{"type": "pane.agent_status_changed", ...}]`
+        streams events after an ack. No replay; a slow subscriber gets `events_lost` and is
+        disconnected. Events are invalidation signals: re-read with `session.snapshot` (or
+        `agent.list` / `pane.list`). Other events: `pane.agent_detected`, `pane.created`,
+        `pane.closed`, `pane.exited`, `pane.updated`, `pane.output_matched`.
+      - Agent status per pane: `idle`, `working`, `blocked` (needs the user), `done` (idle and
+        not yet seen), `unknown`.
+      - CLI: `herdr status`, `herdr api snapshot`, `herdr api schema --json` (read this first:
+        exact event payloads, what a subscription without `pane_id` means, workspace/agent
+        names).
+      - Entities (draft): `herdr_working`, `herdr_blocked` count sensors (attribute: the agents,
+        with workspace and pane); a `herdr_agent` event entity firing `started`, `blocked`, `done`
+        (and maybe `exited`) with pane, agent and workspace attributes, for notification
+        automations; maybe a status sensor per pane as dynamic entities (like Bluetooth devices).
+        Probe: the socket answers `ping`. Reconnect when the herdr server restarts.
+      - Same pattern as MPRIS and BlueZ: subscribe, re-read the snapshot on any event, diff, fire
+        events for transitions.
+- [ ] Docs (entities, configuration, home-assistant: "notify my phone when an agent is
+      blocked"), a blueprint if it is worth it.
+- **Accept:** on a headless machine, Deskhand starts without a login, the device shows herdr
+  agents, and an HA automation notifies when an agent becomes `blocked` and when it is `done`.
+- herdr 0.9.1 is installed on the dev host (`devenv`), with a live server socket, so the
+  integration can be tested against the real thing. Don't disturb the user's running sessions:
+  use a separate `--session` for tests.
+
 ## 7. Security principles (apply throughout)
 - MQTT never carries commands to execute. Scripts, systemd units and KDE shortcuts are allowlisted
   in config.
