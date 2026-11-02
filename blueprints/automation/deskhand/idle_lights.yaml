@@ -1,0 +1,84 @@
+blueprint:
+  name: Deskhand – lights follow the computer
+  description: >
+    Turns lights off when the computer locks, sleeps, shuts down or goes idle,
+    and back on when you return. Uses Deskhand's `session_state` sensor
+    (active, idle, locked, sleeping, off).
+  domain: automation
+  source_url: https://github.com/ryanmwright/deskhand/blob/main/blueprints/automation/deskhand/idle_lights.yaml
+  input:
+    session_state:
+      name: Session state sensor
+      description: The computer's "Session state" sensor.
+      selector:
+        entity:
+          filter:
+            - integration: mqtt
+              domain: sensor
+    lights:
+      name: Lights
+      selector:
+        target:
+          entity:
+            - domain: light
+    away_states:
+      name: Turn off when the session is
+      default: [locked, sleeping, "off"]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Idle (no input for the idle threshold)
+              value: idle
+            - label: Locked
+              value: locked
+            - label: Sleeping
+              value: sleeping
+            - label: "Off (shut down or Deskhand stopped)"
+              value: "off"
+    delay:
+      name: Wait before turning off
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    turn_back_on:
+      name: Turn back on when the session is active again
+      default: true
+      selector:
+        boolean: {}
+
+mode: restart
+
+variables:
+  turn_back_on: !input turn_back_on
+
+triggers:
+  - trigger: state
+    entity_id: !input session_state
+    to: !input away_states
+    for:
+      seconds: !input delay
+    id: away
+  - trigger: state
+    entity_id: !input session_state
+    to: active
+    id: back
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: away
+        sequence:
+          - action: light.turn_off
+            target: !input lights
+      - conditions:
+          - condition: trigger
+            id: back
+          - "{{ turn_back_on }}"
+        sequence:
+          - action: light.turn_on
+            target: !input lights

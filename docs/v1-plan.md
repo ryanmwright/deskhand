@@ -930,13 +930,49 @@ Dependency order:
     reuse the package.
 
 ### M14: Docs and release
-- [ ] README (features, quick start), `docs/configuration.md`, `docs/entities.md`,
+- [x] README (features, quick start), `docs/configuration.md`, `docs/entities.md`,
       `docs/home-assistant.md` (automations: lights off on lock or sleep, meeting light from
       `in_call`, pause media when locked, notify when a job finishes, shortcut triggers)
-- [ ] `blueprints/` (actionable notification, idle → lights, meeting light); `SECURITY.md`
+- [x] `blueprints/` (actionable notification, idle → lights, meeting light); `SECURITY.md`
       (broker ACL per node, unlock risk, title privacy, command allowlist); `CONTRIBUTING.md`
       (adding an integration or backend); release workflow
 - **Accept:** a new user can go from README to a working setup using only the docs.
+- **Status:** done. Checked by following the README in the VM as `dev` (no Deskhand config,
+  dev service stopped): the tarball from the new packaging script, the documented `install` and
+  `cp -r share/. ~/.local/share/` steps, `deskhand setup`, then the device in HA with live
+  states, and locking the screen changed "Session state". The tray showed the installed app
+  icon. Found on the way: `~/.local/bin` is not on `PATH` everywhere (NixOS), now said in the
+  README.
+  - Every automation in `docs/home-assistant.md` was loaded into the dev HA with the VM's
+    entity ids and all nine came up enabled (schema-valid). All three blueprints load. The
+    actionable-notification blueprint was run for real: HA showed "Doorbell" with Unlock/Ignore
+    in Plasma, and clicking Unlock ran the first button's actions.
+  - Every relative link and anchor in the new docs resolves; actionlint and shellcheck pass.
+- **Notes and deviations:**
+  - Docs: `README.md`, `docs/configuration.md` (every option, from the option structs),
+    `docs/entities.md` (from the VM's `print-discovery` plus the code for hardware the VM lacks),
+    `docs/home-assistant.md` (broker, entity ids, automations, actionable notifications, shortcut
+    triggers, media player card, uninstall, troubleshooting), `SECURITY.md` (vulnerability
+    reports through GitHub's private advisories, allowlists, unlock, broker ACL per node,
+    credentials, privacy), `CONTRIBUTING.md` (dev setup, architecture, adding an integration
+    with a skeleton, adding a backend), `CHANGELOG.md`.
+  - Blueprints in `blueprints/automation/deskhand/`: `meeting_light`, `idle_lights` (lights
+    follow `session_state`), `actionable_notification`. Plasma sends "closed" right after an
+    action, so the actionable blueprint handles the event entity's events in order in a loop;
+    a template trigger that looked at the latest event saw only "closed" and missed the click.
+  - Release: `.github/scripts/package.sh` builds the tarball (binary, desktop file, icon,
+    completions, man page, README, CHANGELOG, licenses) for CI's per-push artifact and for
+    `.github/workflows/release.yml`. On a `v*` tag that workflow checks the tag against the
+    workspace version and CHANGELOG, builds x86_64 and aarch64 (`ubuntu-22.04-arm`) tarballs,
+    and creates a **draft** release with the version's CHANGELOG section. CI no longer attaches
+    to releases itself.
+  - `deskhand setup` with a Nix binary now uses a profile link that resolves to it
+    (`~/.nix-profile/bin/deskhand`, the per-user or system profile), so `nix profile install`
+    users get a service that survives upgrades; only a bare store path gets the Home Manager
+    hint.
+  - Dev: the VM can keep stale 9p pages of a rebuilt `target/debug/deskhand` while the old one
+    runs, and new processes then segfault (`ld.so` assertion); `just vm-deploy` now stops the
+    service and drops the guest's caches before starting it.
 
 ## 7. Security principles (apply throughout)
 - MQTT never carries commands to execute. Scripts, systemd units and KDE shortcuts are allowlisted
@@ -979,6 +1015,7 @@ Dependency order:
 | 2026-11-01 | Follow-up | Per-app volume: shared `Streams` registry in `LinuxEnv` fed by the pulse thread (sink-inputs, stream-volume setter); MPRIS players without a usable volume (Chromium-based) use their streams, matched by process tree, then name. Checked in the VM with real Chromium. Host feedback: Bluetooth and monitor brightness confirmed |
 | 2026-11-01 | M12 | `deskhand setup` (mDNS/fallback broker discovery, credentials and TLS, connection test with retry, atomic 0600 config plus password file, systemd user unit or a Home Manager hint; `--yes` for scripts), ksni tray (status, Pause, open config, Quit) over a new `HubHandle::status()` watch, doctor shows the service state. Checked in the VM: interactive setup to a running service and the device in HA; Pause/unpause/Quit from the tray. 6 new tests |
 | 2026-11-01 | M13 | Crane package (cached deps, `features` override) with desktop file, icon, user unit, completions and man page; flake checks for fmt, clippy, tests (D-Bus tests in the sandbox) and deny; HM `tray` option; `kde-e2e` NixOS test (Plasma, Mosquitto, packaged daemon: discovery, lock state, notification) passing, nightly workflow. Tray uses the app icon when installed. Disk filled once (getFlake on a path copies `target/`) |
+| 2026-11-02 | M14 | README, configuration, entities and Home Assistant docs, SECURITY, CONTRIBUTING, CHANGELOG; three blueprints; packaging script shared by CI and a new tag-driven release workflow (draft release, x86_64 and aarch64). Checked by following the README in the VM to a working device, loading every documented automation and blueprint into the dev HA, and running the actionable-notification blueprint (fixed: click followed by close). Setup now uses Nix profile links. Fixed VM 9p stale-binary segfaults in `vm-deploy`. **V1 milestones complete** |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

@@ -1,0 +1,132 @@
+blueprint:
+  name: Deskhand – actionable desktop notification
+  description: >
+    When something happens, shows a desktop notification with up to two
+    buttons on a computer running Deskhand, and runs the actions of the
+    button that was clicked. Nothing runs on the computer itself.
+  domain: automation
+  source_url: https://github.com/ryanmwright/deskhand/blob/main/blueprints/automation/deskhand/actionable_notification.yaml
+  input:
+    trigger_entity:
+      name: When this turns on
+      selector:
+        entity: {}
+    node_id:
+      name: Deskhand node id
+      description: Shown by `deskhand doctor` ("node id").
+      selector:
+        text: {}
+    topic_prefix:
+      name: Deskhand topic prefix
+      default: deskhand
+      selector:
+        text: {}
+    notification_event:
+      name: Notification event entity
+      description: The computer's "Notification" event entity.
+      selector:
+        entity:
+          filter:
+            - integration: mqtt
+              domain: event
+    title:
+      name: Title
+      selector:
+        text: {}
+    message:
+      name: Message
+      default: ""
+      selector:
+        text:
+          multiline: true
+    urgency:
+      name: Urgency
+      default: normal
+      selector:
+        select:
+          options: [low, normal, critical]
+    first_label:
+      name: First button
+      default: "OK"
+      selector:
+        text: {}
+    first_actions:
+      name: Actions for the first button
+      default: []
+      selector:
+        action: {}
+    second_label:
+      name: Second button (empty for none)
+      default: ""
+      selector:
+        text: {}
+    second_actions:
+      name: Actions for the second button
+      default: []
+      selector:
+        action: {}
+    timeout:
+      name: Wait for a click
+      default: 120
+      selector:
+        number:
+          min: 10
+          max: 3600
+          unit_of_measurement: s
+
+mode: single
+
+variables:
+  node_id: !input node_id
+  topic_prefix: !input topic_prefix
+  title: !input title
+  message: !input message
+  urgency: !input urgency
+  first_label: !input first_label
+  second_label: !input second_label
+  tag: "{{ 'ha_' ~ this.entity_id | replace('.', '_') }}"
+  payload: >
+    {% set ns = namespace(actions=[{"id": "first", "label": first_label}]) %}
+    {% if second_label %}{% set ns.actions = ns.actions + [{"id": "second", "label": second_label}] %}{% endif %}
+    {{ {"title": title, "message": message, "urgency": urgency, "tag": tag,
+        "timeout": 0, "actions": ns.actions} | to_json }}
+
+triggers:
+  - trigger: state
+    entity_id: !input trigger_entity
+    to: "on"
+
+actions:
+  - action: mqtt.publish
+    data:
+      topic: "{{ topic_prefix }}/{{ node_id }}/notification/set"
+      payload: "{{ payload }}"
+  # Handle the event entity's events in order until this notification is
+  # clicked or closed (a click is followed by `closed`; other notifications
+  # fire the same entity).
+  - repeat:
+      sequence:
+        - wait_for_trigger:
+            - trigger: state
+              entity_id: !input notification_event
+          timeout:
+            seconds: !input timeout
+        - if:
+            - "{{ wait.trigger is not none
+                  and wait.trigger.to_state.attributes.tag == tag
+                  and wait.trigger.to_state.attributes.event_type == 'action' }}"
+          then:
+            - choose:
+                - conditions: "{{ wait.trigger.to_state.attributes.action == 'first' }}"
+                  sequence: !input first_actions
+                - conditions: "{{ wait.trigger.to_state.attributes.action == 'second' }}"
+                  sequence: !input second_actions
+      until:
+        - "{{ wait.trigger is none
+              or (wait.trigger.to_state.attributes.tag == tag
+                  and wait.trigger.to_state.attributes.event_type in ['action', 'closed']) }}"
+  # Close it if nobody clicked.
+  - action: mqtt.publish
+    data:
+      topic: "{{ topic_prefix }}/{{ node_id }}/notification/set"
+      payload: "{{ {'tag': tag, 'dismiss': true} | to_json }}"

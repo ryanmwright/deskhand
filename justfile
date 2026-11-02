@@ -65,9 +65,11 @@ vm-ssh *ARGS:
     dev/vm/ssh.sh {{ if ARGS == "" { "" } else { quote(ARGS) } }}
 
 # Rebuild deskhand on the host and restart it in the VM
+# The VM sees target/ over 9p and can keep stale pages of a replaced binary
+# (new processes then segfault): stop, drop the guest's caches, start.
 vm-deploy:
     cargo build -p deskhand
-    dev/vm/ssh.sh 'systemctl --user restart deskhand-dev && systemctl --user --no-pager status deskhand-dev | head -3'
+    dev/vm/ssh.sh 'systemctl --user stop deskhand-dev; sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"; systemctl --user start deskhand-dev && systemctl --user --no-pager status deskhand-dev | head -3'
 
 # Save a screenshot of a headless VM to /tmp/plasma-vm.png
 vm-screenshot:

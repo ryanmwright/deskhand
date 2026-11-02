@@ -1,6 +1,7 @@
 /target
 /result
 /result-*
+/dist
 *.qcow2
 .direnv/
 .env

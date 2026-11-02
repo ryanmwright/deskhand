@@ -375,12 +375,41 @@ fn user_unit_dir() -> PathBuf {
     config.join("systemd/user")
 }
 
+/// Profile links that point into the Nix store and survive upgrades.
+fn nix_profile_links() -> Vec<PathBuf> {
+    let var = |k: &str| std::env::var(k).unwrap_or_default();
+    [
+        format!("{}/.nix-profile/bin/deskhand", var("HOME")),
+        format!("{}/.local/state/nix/profile/bin/deskhand", var("HOME")),
+        format!("/etc/profiles/per-user/{}/bin/deskhand", var("USER")),
+        "/run/current-system/sw/bin/deskhand".to_owned(),
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// The path to put in the unit: for a binary in the Nix store, a profile
+/// link that resolves to it (`nix profile install`), so upgrades don't
+/// break the unit; otherwise the binary itself.
+fn stable_exe(exe: &Path, profile_links: &[PathBuf]) -> PathBuf {
+    if !exe.starts_with("/nix/store") {
+        return exe.to_owned();
+    }
+    profile_links
+        .iter()
+        .find(|l| l.canonicalize().is_ok_and(|t| t == exe))
+        .cloned()
+        .unwrap_or_else(|| exe.to_owned())
+}
+
 /// Why the unit should not be installed by us, if so.
 fn service_blocker(exe: &Path, unit_path: &Path) -> Option<String> {
     if exe.starts_with("/nix/store") {
         return Some(
-            "this deskhand is in the Nix store: enable the service with the Home Manager module \
-             instead (`services.deskhand.enable = true;`, see the flake's homeManagerModules)"
+            "this deskhand is only in the Nix store (not in a profile), so the service would \
+             break on the next update. Install it with `nix profile install`, or use the Home \
+             Manager module (`services.deskhand.enable = true;`)"
                 .into(),
         );
     }
@@ -623,6 +652,7 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
     let exe = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .context("cannot find the deskhand binary")?;
+    let exe = stable_exe(&exe, &nix_profile_links());
     let unit_path = user_unit_dir().join(UNIT_NAME);
     if let Some(why) = service_blocker(&exe, &unit_path) {
         println!("Not installing the service: {why}");
@@ -775,5 +805,32 @@ mod tests {
             .is_some()
         );
         assert!(service_blocker(Path::new("/opt/deskhand"), Path::new("/nonexistent")).is_none());
+    }
+
+    #[test]
+    fn nix_profile_link_is_preferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("deskhand");
+        // Any absolute target works for the test; only /nix/store paths are
+        // replaced, so use one when it exists (always on NixOS).
+        let Some(target) = std::fs::read_dir("/nix/store")
+            .ok()
+            .and_then(|mut d| d.next())
+            .and_then(|e| e.ok())
+            .map(|e| e.path())
+        else {
+            return;
+        };
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let canonical = target.canonicalize().unwrap();
+        assert_eq!(
+            stable_exe(&canonical, &[PathBuf::from("/nonexistent"), link.clone()]),
+            link
+        );
+        assert_eq!(stable_exe(&canonical, &[]), canonical);
+        assert_eq!(
+            stable_exe(Path::new("/opt/deskhand"), &[link]),
+            Path::new("/opt/deskhand")
+        );
     }
 }

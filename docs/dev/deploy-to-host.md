@@ -61,7 +61,7 @@ deskhand run          # Ctrl-C publishes "offline" and exits
 ```
 
 The device appears in Home Assistant under **Settings → Devices → MQTT**. To keep it running,
-use a systemd user service (the setup wizard in M12 will install this for you):
+use a systemd user service (`deskhand setup` installs this for you; by hand:)
 
 ```ini
 # ~/.config/systemd/user/deskhand.service
