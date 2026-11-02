@@ -101,5 +101,5 @@ jobs:
       - run: nix build .#deskhand --print-build-logs
       - run: nix flake check --no-build
       - run: nix fmt -- --check flake.nix nix/*.nix
-      # Evaluates the Plasma VM (building it needs ~17 GB; the nightly VM job comes in M13).
+      # Evaluates the Plasma VM (building it needs ~17 GB; .github/workflows/nightly.yml runs the kde-e2e VM test).
       - run: nix eval .#nixosConfigurations.plasma-vm.config.system.build.vm.drvPath

@@ -849,12 +849,53 @@ Dependency order:
   - `dev/vm/click.sh X Y right` right-clicks (tray menus).
 
 ### M13: Nix packaging and VM e2e test
-- [ ] `packages.default` (buildRustPackage, libpulse, .desktop file, unit template)
-- [ ] `homeManagerModules.default` (`services.deskhand.{enable,package,settings,passwordFile,tray}`).
+- [x] `packages.default` (buildRustPackage, libpulse, .desktop file, unit template)
+- [x] `homeManagerModules.default` (`services.deskhand.{enable,package,settings,passwordFile,tray}`).
       **Base module done early (after M9):** everything except `tray` (M12); see the note below
-- [ ] `checks.kde-e2e` (runNixOSTest) plus a nightly CI job
+- [x] `checks.kde-e2e` (runNixOSTest) plus a nightly CI job
 - **Accept:** `nix build` and `nix flake check` pass; the HM module gives a working service with
   the password outside the store.
+- **Status:** done. `nix build` and every check pass locally (each built: `deskhand`,
+  `cargo-fmt`, `cargo-clippy`, `cargo-test`, `cargo-deny`, `hm-module`, `kde-e2e`), and
+  `nix flake check --no-build --all-systems` evaluates for x86_64 and aarch64. The HM module's
+  service and password handling were checked in the VM in M9's follow-up (see below).
+  - `kde-e2e` boots Plasma 6 (SDDM autologin), runs the packaged daemon as a user service
+    against a local Mosquitto and passes in about 2.5 min of test script: discovery has
+    `session_state`, `screen_locked` and `active_window`; `deskhand doctor` sees the daemon
+    online; `loginctl lock-sessions` publishes `screen_locked=ON` and `session_state=locked`, and
+    unlocking publishes `OFF`; a message on `notify/set` reaches `org.freedesktop.Notifications`
+    (seen with `dbus-monitor`). It saves a screenshot.
+- **Decisions (with the user):** crane instead of `buildRustPackage`; desktop file, icon, user
+  unit, completions and man page in the package; a `features` override instead of a separate
+  minimal package; tests as crane flake checks.
+- **Notes and deviations:**
+  - `nix/package.nix` (crane, `callPackage`): dependencies are one cached derivation
+    (`buildDepsOnly`), so a code change only rebuilds the workspace crates.
+    `deskhand.override { features = [ "kde" "tray" ]; }` builds a variant; without `audio-pulse`
+    it has no libpulse (checked: no libpulse in `ldd`, no `setup` command).
+  - The package installs `share/applications/io.github.ryanmwright.Deskhand.desktop`
+    (`NoDisplay`, since it is a daemon), `share/icons/hicolor/scalable/apps/<APP_ID>.svg` (new
+    icon: a monitor with a house on HA blue), `share/systemd/user/deskhand.service` (for NixOS
+    `systemd.packages`), bash/zsh/fish completions and `deskhand.1`. The completions and man page
+    come from hidden `deskhand completions <shell>` and `deskhand man` subcommands
+    (`clap_complete`, `clap_mangen`).
+  - The tray uses the app icon with a status overlay (`media-playback-paused`,
+    `network-disconnect`) when the icon is installed, else the theme status icons as in M12.
+  - Checks: `cargo-test` runs the unit and D-Bus tests in the sandbox (`dbus-daemon` from
+    `nativeCheckInputs`; `CI=1` makes a missing daemon fail instead of skip). `cargo-deny` checks
+    bans, licenses and sources only (advisories need the network; the CI job checks them).
+  - HM module: `tray` (default true) sets `general.tray`; an explicit `settings.general.tray`
+    wins. The check asserts both values.
+  - CI: `.github/workflows/nightly.yml` builds `checks.x86_64-linux.kde-e2e` at 03:17 UTC and on
+    demand (KVM opened for the build user, disk space freed first) and uploads the screenshot.
+    The push CI still only evaluates the checks. `just e2e` and `just flake-check` run them
+    locally.
+  - In the e2e test Plasma's locker sometimes misses the first `unlock-sessions`; the test
+    repeats it.
+  - Disk: `builtins.getFlake (toString ./.)` copies the whole directory, including the 28 GB
+    `target/`, into the store and filled the disk; use `git+file://` (tracked files only) or
+    `.#` references. Deleting `target/debug/incremental` (13 GB) freed space.
+  - The binary-cache CI decision below is still open.
 
 - **Base Home Manager module (pulled forward after M9, so the user can run Deskhand on the KDE
   host):** `nix/hm-module.nix`, exported as `homeManagerModules.default` and
@@ -937,6 +978,7 @@ Dependency order:
 | 2026-11-01 | M11 | KDE crate: kglobalaccel custom shortcuts (`[[shortcut]]` → `shortcut_<id>` events, four-int key encoding, stale actions removed first) and allowlisted invoke buttons, PowerDevil per-display brightness, DPMS `screens_on` switch over KWin's Wayland protocol (new spike probe) with a PowerDevil fallback button, opt-in logout and output switches. All checked in the VM, including a real key press driving an HA automation and the entry in System Settings. 19 new tests and three Plasma mocks; the kglobalaccel mock caught a `(ssss)`-instead-of-`as` action id. `just vm-ssh` quoting fixed |
 | 2026-11-01 | Follow-up | Per-app volume: shared `Streams` registry in `LinuxEnv` fed by the pulse thread (sink-inputs, stream-volume setter); MPRIS players without a usable volume (Chromium-based) use their streams, matched by process tree, then name. Checked in the VM with real Chromium. Host feedback: Bluetooth and monitor brightness confirmed |
 | 2026-11-01 | M12 | `deskhand setup` (mDNS/fallback broker discovery, credentials and TLS, connection test with retry, atomic 0600 config plus password file, systemd user unit or a Home Manager hint; `--yes` for scripts), ksni tray (status, Pause, open config, Quit) over a new `HubHandle::status()` watch, doctor shows the service state. Checked in the VM: interactive setup to a running service and the device in HA; Pause/unpause/Quit from the tray. 6 new tests |
+| 2026-11-01 | M13 | Crane package (cached deps, `features` override) with desktop file, icon, user unit, completions and man page; flake checks for fmt, clippy, tests (D-Bus tests in the sandbox) and deny; HM `tray` option; `kde-e2e` NixOS test (Plasma, Mosquitto, packaged daemon: discovery, lock state, notification) passing, nightly workflow. Tray uses the app icon when installed. Disk filled once (getFlake on a path copies `target/`) |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

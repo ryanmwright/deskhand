@@ -58,6 +58,8 @@ anyhow = "1.0.104"
 
 # Binary
 clap = { version = "4.6", features = ["derive", "env"] }
+clap_complete = "4.6.11"
+clap_mangen = "0.3.3"
 inquire = "0.9.4"
 mdns-sd = "0.21.6"
 ksni = "0.3.7"

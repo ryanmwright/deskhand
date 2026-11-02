@@ -3,10 +3,15 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      crane,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -14,34 +19,52 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+
+      # Shared by the package and the checks. The dependencies are built once
+      # (`cargoArtifacts`); a change to Deskhand only rebuilds its own crates.
+      commonFor =
+        pkgs:
+        let
+          craneLib = crane.mkLib pkgs;
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./crates
+              ./data
+              ./deny.toml
+              ./rustfmt.toml
+            ];
+          };
+          args = {
+            inherit src;
+            pname = "deskhand";
+            version = cargoToml.workspace.package.version;
+            strictDeps = true;
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = [ pkgs.libpulseaudio ];
+          };
+        in
+        {
+          inherit craneLib src args;
+          cargoArtifacts = craneLib.buildDepsOnly args;
+        };
     in
     {
-      packages = forAllSystems (pkgs: {
-        deskhand = pkgs.rustPlatform.buildRustPackage {
-          pname = "deskhand";
-          version = cargoToml.workspace.package.version;
-          src = pkgs.lib.cleanSource ./.;
-          cargoLock.lockFile = ./Cargo.lock;
-          cargoBuildFlags = [
-            "--package"
-            "deskhand"
-          ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.libpulseaudio ];
-          # Tests need dbus-daemon and containers; CI runs them outside the Nix sandbox.
-          doCheck = false;
-          meta = {
-            description = "Expose your desktop to Home Assistant over MQTT";
-            license = with pkgs.lib.licenses; [
-              mit
-              asl20
-            ];
-            mainProgram = "deskhand";
-            platforms = pkgs.lib.platforms.linux;
+      packages = forAllSystems (
+        pkgs:
+        let
+          common = commonFor pkgs;
+        in
+        {
+          deskhand = pkgs.callPackage ./nix/package.nix {
+            inherit common;
+            inherit (common) craneLib;
           };
-        };
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.deskhand;
-      });
+          default = self.packages.${pkgs.stdenv.hostPlatform.system}.deskhand;
+        }
+      );
 
       # Home Manager module (nix/hm-module.nix). `homeModules` is the newer name.
       homeManagerModules.default = import ./nix/hm-module.nix self;
@@ -49,12 +72,51 @@
 
       # Evaluates the module against a stub of the Home Manager options it uses
       # (so this flake needs no home-manager input) and checks the result.
-      checks = forAllSystems (pkgs: {
-        hm-module = import ./nix/hm-module-check.nix {
-          inherit pkgs;
-          module = self.homeManagerModules.default;
-        };
-      });
+      checks = forAllSystems (
+        pkgs:
+        let
+          common = commonFor pkgs;
+          inherit (common) craneLib args cargoArtifacts;
+        in
+        {
+          inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) deskhand;
+          hm-module = import ./nix/hm-module-check.nix {
+            inherit pkgs;
+            module = self.homeManagerModules.default;
+          };
+          cargo-fmt = craneLib.cargoFmt { inherit (common) src; };
+          cargo-clippy = craneLib.cargoClippy (
+            args
+            // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "--all-targets -- -D warnings";
+            }
+          );
+          # Unit and D-Bus tests (private dbus-daemon buses). The broker tests
+          # need containers and only run with DESKHAND_IT=1 (`just it`).
+          cargo-test = craneLib.cargoTest (
+            args
+            // {
+              inherit cargoArtifacts;
+              nativeCheckInputs = [ pkgs.dbus ];
+              # require_dbus!() fails instead of skipping.
+              CI = "1";
+            }
+          );
+          # Advisories need the network; CI's cargo-deny job checks them.
+          cargo-deny = craneLib.cargoDeny {
+            inherit (common) src;
+            cargoDenyChecks = "bans licenses sources";
+          };
+        }
+        # Plasma VM end-to-end test; needs KVM (nightly CI job).
+        // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          kde-e2e = import ./nix/kde-e2e.nix {
+            inherit pkgs;
+            inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) deskhand;
+          };
+        }
+      );
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {

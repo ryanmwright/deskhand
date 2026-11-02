@@ -56,6 +56,13 @@ let
     };
   };
   disabled = eval { services.deskhand.settings.mqtt.host = "x"; };
+  noTray = eval {
+    services.deskhand = {
+      enable = true;
+      tray = false;
+      settings.mqtt.host = "broker.lan";
+    };
+  };
   service = good.systemd.user.services.deskhand;
 in
 assert failed good == [ ];
@@ -69,6 +76,8 @@ pkgs.runCommand "deskhand-hm-module-check" { nativeBuildInputs = [ pkgs.gnugrep 
   grep -qx 'password_file = "/run/secrets/mqtt"' "$config"
   grep -qx 'host = "broker.lan"' "$config"
   grep -qx 'compat_mqtt_media_player = true' "$config"
+  grep -qx 'tray = true' "$config"
+  grep -qx 'tray = false' ${noTray.xdg.configFile."deskhand/config.toml".source}
   grep -q -- "--config $config run" <<< "${service.Service.ExecStart}"
   cp "$config" $out
 ''

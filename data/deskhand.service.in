@@ -1,0 +1,15 @@
+# systemd user unit for packages (NixOS `systemd.packages`, distributions).
+# `deskhand setup` and the Home Manager module write their own.
+[Unit]
+Description=Deskhand: this desktop in Home Assistant
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=notify
+ExecStart=@bindir@/deskhand run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

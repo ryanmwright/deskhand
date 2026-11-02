@@ -13,19 +13,43 @@ use tokio_util::sync::CancellationToken;
 
 struct DeskhandTray {
     status: HubStatus,
+    /// Our own icon is installed (packages): use it with a status overlay.
+    app_icon: bool,
     device: String,
     config_path: PathBuf,
     hub: HubHandle,
     quit: CancellationToken,
 }
 
-/// Status line, icon name and tooltip text for a hub status.
-fn describe(status: HubStatus) -> (&'static str, &'static str) {
+/// Status text, a theme icon for it, and an overlay for our own icon.
+fn describe(status: HubStatus) -> (&'static str, &'static str, &'static str) {
     match (status.paused, status.connected) {
-        (true, _) => ("Paused", "user-away"),
-        (false, true) => ("Connected", "user-online"),
-        (false, false) => ("Not connected to the broker", "user-offline"),
+        (true, _) => ("Paused", "user-away", "media-playback-paused"),
+        (false, true) => ("Connected", "user-online", ""),
+        (false, false) => (
+            "Not connected to the broker",
+            "user-offline",
+            "network-disconnect",
+        ),
     }
+}
+
+/// Whether the package installed `<APP_ID>.svg` into an icon theme dir.
+fn app_icon_installed() -> bool {
+    let home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    let dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    home.into_iter()
+        .chain(std::env::split_paths(&dirs))
+        .any(|d| {
+            d.join(format!(
+                "icons/hicolor/scalable/apps/{}.svg",
+                deskhand_core::APP_ID
+            ))
+            .is_file()
+        })
 }
 
 impl ksni::Tray for DeskhandTray {
@@ -42,7 +66,19 @@ impl ksni::Tray for DeskhandTray {
     }
 
     fn icon_name(&self) -> String {
-        describe(self.status).1.into()
+        if self.app_icon {
+            deskhand_core::APP_ID.into()
+        } else {
+            describe(self.status).1.into()
+        }
+    }
+
+    fn overlay_icon_name(&self) -> String {
+        if self.app_icon {
+            describe(self.status).2.into()
+        } else {
+            String::new()
+        }
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -103,6 +139,7 @@ pub async fn run(hub: HubHandle, device: String, config_path: PathBuf, quit: Can
     let mut status = hub.status();
     let tray = DeskhandTray {
         status: *status.borrow(),
+        app_icon: app_icon_installed(),
         device,
         config_path,
         hub,
@@ -140,6 +177,8 @@ mod tests {
         assert_eq!(s(true, false).1, "user-online");
         assert_eq!(s(false, false).1, "user-offline");
         assert_eq!(s(true, true).1, "user-away");
+        assert_eq!(s(true, false).2, "");
+        assert_eq!(s(false, false).2, "network-disconnect");
         assert_eq!(s(false, true).0, "Paused");
     }
 }

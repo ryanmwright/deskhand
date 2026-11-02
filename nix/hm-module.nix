@@ -25,7 +25,8 @@ self:
 let
   cfg = config.services.deskhand;
   toml = pkgs.formats.toml { };
-  settings = lib.recursiveUpdate cfg.settings (
+  # `settings.general.tray`, if set, wins over `tray`.
+  settings = lib.recursiveUpdate (lib.recursiveUpdate { general.tray = cfg.tray; } cfg.settings) (
     lib.optionalAttrs (cfg.passwordFile != null) {
       mqtt.password_file = cfg.passwordFile;
     }
@@ -60,6 +61,15 @@ in
         Deskhand's `config.toml` as Nix. It is written to the Nix store and
         linked to `~/.config/deskhand/config.toml`, so `deskhand doctor` uses
         it too. Do not put the MQTT password here; use `passwordFile`.
+      '';
+    };
+
+    tray = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Show a tray icon (status, Pause, Quit) when the desktop has a
+        StatusNotifierItem tray. Sets `general.tray`.
       '';
     };
 

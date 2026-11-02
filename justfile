@@ -78,3 +78,11 @@ vm-screenshot:
 # Delete the VM disk (the next boot starts fresh)
 vm-reset:
     rm -f dev/vm/plasma-vm.qcow2
+
+# Plasma VM end-to-end test of the packaged daemon (needs KVM; nightly in CI)
+e2e:
+    nix build .#checks.x86_64-linux.kde-e2e --print-build-logs
+
+# Every flake check (package, crane fmt/clippy/test/deny, Home Manager module, e2e)
+flake-check:
+    nix flake check --print-build-logs

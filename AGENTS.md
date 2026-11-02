@@ -70,10 +70,13 @@ Everything runs inside the flake devShell: `nix develop` (or prefix commands wit
 | `dev/ha/states.sh [regex]` | prints matching HA entity states (default: `deskhand`) |
 | `dev/ha/api.sh METHOD PATH [JSON]` | calls the dev HA REST API (services, automations, history) |
 | `just mqtt-watch` | prints all broker traffic |
-| `nix build` | builds the `deskhand` package |
+| `nix build` | builds the `deskhand` package (crane; `nix/package.nix`) |
+| `just e2e` | the `kde-e2e` NixOS test: Plasma VM with the packaged daemon (needs KVM; nightly in CI) |
+| `just flake-check` | every flake check: package, crane fmt/clippy/test/deny, HM module, e2e |
 
 - Dev broker users: `deskhand`/`deskhand-dev` (ACL: `deskhand/#`, `homeassistant/#`) and `homeassistant`/`homeassistant-dev`.
 - `dev/ha/bootstrap.sh` stores an HA refresh token in `dev/ha/config/.deskhand-dev-refresh-token` for scripted checks against the HA REST API.
+- Never `builtins.getFlake` a plain path of this repo: it copies `target/` (tens of GB) into the store. Use `git+file://` or `.#` references.
 - Use `pkill -x deskhand`, not `pkill -f`: the `-f` pattern also matches the shell running the command.
 - On this machine `docker` is podman. The devShell points testcontainers at the podman socket.
 - This dev host runs XFCE, not KDE. KDE features are tested in the Plasma 6 Wayland VM or on the user's real KDE host using CI artifacts (`docs/dev/deploy-to-host.md`).
@@ -96,4 +99,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-Next step: **M13 (Nix packaging and VM e2e test)**; the base Home Manager module exists already (see its status in the plan). Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.
+Next step: **M14 (docs and release)**. Still open from M13: the binary-cache CI decision (see the plan). Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.

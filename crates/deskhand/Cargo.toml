@@ -18,6 +18,8 @@ setup = ["dep:inquire", "dep:mdns-sd", "dep:toml"]
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
+clap_mangen.workspace = true
 deskhand-common.workspace = true
 deskhand-core.workspace = true
 deskhand-kde = { workspace = true, optional = true }

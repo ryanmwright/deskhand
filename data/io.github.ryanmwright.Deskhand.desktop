@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Deskhand
+GenericName=Home Assistant desktop bridge
+Comment=Expose this desktop to Home Assistant over MQTT
+Exec=deskhand run
+Icon=io.github.ryanmwright.Deskhand
+Terminal=false
+Categories=Utility;
+Keywords=home assistant;mqtt;automation;
+# A background daemon started by its systemd user unit, not from the menu.
+NoDisplay=true

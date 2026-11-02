@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod doctor;
 mod logging;
@@ -62,6 +62,12 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Print shell completions (for packagers).
+    #[command(hide = true)]
+    Completions { shell: clap_complete::Shell },
+    /// Print the man page in roff (for packagers).
+    #[command(hide = true)]
+    Man,
 }
 
 fn default_config_path() -> PathBuf {
@@ -72,6 +78,22 @@ fn default_config_path() -> PathBuf {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    match &cli.command {
+        Some(Command::Completions { shell }) => {
+            clap_complete::generate(
+                *shell,
+                &mut Cli::command(),
+                "deskhand",
+                &mut std::io::stdout(),
+            );
+            return Ok(());
+        }
+        Some(Command::Man) => {
+            clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
+            return Ok(());
+        }
+        _ => {}
+    }
     let explicit_config = cli.config.is_some();
     let config_path = cli.config.unwrap_or_else(default_config_path);
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -96,6 +118,7 @@ fn main() -> anyhow::Result<()> {
             logging::init("warn");
             runtime.block_on(setup::setup(&config_path, explicit_config, options))
         }
+        Command::Completions { .. } | Command::Man => unreachable!("handled above"),
         Command::PrintDiscovery { all } => {
             runtime.block_on(print_discovery::print(&config_path, all))
         }
