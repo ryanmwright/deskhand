@@ -1028,6 +1028,186 @@ run locally.
   integration can be tested against the real thing. Don't disturb the user's running sessions:
   use a separate `--session` for tests.
 
+### M16–M19 (post-V1): Logitech HID++ peripheral batteries
+Context (2026-11-04, with the user): an MX Keys S on a Logi Bolt receiver does not show up in
+Deskhand, Plasma or `upower -d`. The kernel exposes no battery for it, probably because the Bolt
+receiver is bound to `hid-generic` (M16 confirms). Logitech's HID++ protocol reaches the device
+from user space over `/dev/hidrawN`. The design is a generic peripheral battery model that HID++
+feeds as a *supplemental* source next to UPower. It is not specific to the MX Keys S: the MX Keys
+Mini, MX Master 3S and MX Anywhere work through the same HID++ features. M16–M19 do not depend on
+M15.
+
+**Requirements (user):**
+- HID++ is a supplemental source.
+- Bolt (and Unifying) receiver discovery and paired-device enumeration.
+- Battery features: Unified Battery 0x1004, falling back to 0x1000 and 0x1001 (estimated %).
+- States: charging, discharging, full and unknown.
+- Connection status and the time of the last successful reading.
+- Identity: model ID, WPID, serial and firmware, plus the receiver and slot.
+- No duplicate entities; keep the `battery_<model>…` naming scheme.
+- Graceful handling of hotplug, sleeping devices and missing receivers.
+- No unnecessary polling.
+- UPower and HID++ availability independent of each other, and no competing `battery` integration.
+- Nothing Logitech-specific in core.
+- Backlight is the only control, and it is opt-in.
+
+**Decisions:**
+- **Own HA device per peripheral and per receiver** (`via_device`: peripheral → receiver → desktop).
+  - The user accepts the one-time move of today's UPower `battery_<model>` sensors onto these
+    devices, while the user base is tiny.
+  - Object ids keep the `battery_<model>…` scheme.
+- **New integration** `peripheral_battery.merged` (capability `peripheral_battery`).
+  - It owns all peripheral battery entities and merges *sources*: UPower peripherals and HID++.
+    Each is optional, with its own backoff loop.
+  - `battery.upower` keeps only the laptop battery and AC.
+  - Why: feeding HID++ through the UPower integration would make HID++ need UPower, and a second
+    `battery` integration would make the supervisor pick only one of the two.
+- **Protocol:** [`openlogi-hidpp`](https://crates.io/crates/openlogi-hidpp) (lib name `hidpp`).
+  - It is OpenLogi's fork of `hidpp`: 0BSD, runtime-agnostic, with HID I/O through its
+    `RawHidChannel` trait. It covers Bolt and Unifying receivers and every feature listed here,
+    including the future ones.
+  - Solaar is GPL Python, so it is used as a behaviour reference only.
+  - Don't use `openlogi-hid` (OpenLogi's app layer over a forked `async-hid`).
+  - Pin it exactly (69 releases in its first 5 months) and keep all use behind one adapter
+    module. Vendoring is the fallback.
+  - It needs **Rust 1.99**. Take the toolchain from a second, nixos-unstable nixpkgs input until
+    nixos-26.11, and add `0BSD` to the licence allowlist in `deny.toml`.
+
+**Entities per peripheral (on its own device):**
+- `battery_<model>`: %. Attributes `kind`, `state`, `source`, `level`, `estimated`, `slot`,
+  `encrypted`.
+- `battery_<model>_state`: enum in UPower's vocabulary.
+- `battery_<model>_low`: binary sensor, battery class. The device's flag or level, else ≤ 15 %.
+- `battery_<model>_connected`: binary sensor, connectivity class.
+- `battery_<model>_updated`: diagnostic timestamp of the last reading.
+- Model, model ID (WPID), serial and firmware go into HA's device fields.
+- A receiver device has a diagnostic `paired_devices` sensor (slot → name, WPID, online).
+- A sleeping device keeps its last values; only `connected` turns off.
+
+**Merging:**
+- Sources report readings keyed like today's `peripheral_from` (model, else serial, else path).
+  If the model slug differs between sources, the key falls back to the serial.
+- HID++ wins while it has a link or a fresh reading. Otherwise UPower wins, which covers Unifying
+  devices the kernel exposes as `hidpp_battery_*`.
+- An entity is removed only when no source knows the device. Removal uses the hub's 30 s grace
+  period.
+
+#### M16: HID++ spike on the KDE host
+- [ ] Rust 1.99 toolchain (second nixpkgs input), `openlogi-hidpp` pinned, `0BSD` in `deny.toml`.
+- [ ] `crates/deskhand-linux/examples/hidpp_probe.rs`:
+      - Lists hidraw nodes with vendor, product, bound driver and permissions.
+      - Dumps the receiver (unique ID, firmware, pairings, device arrival).
+      - Per device: the feature table, identity (0x0003/0x0005), battery (0x1004/0x1000/0x1001)
+        and backlight (0x1982).
+      - Then logs every report for 120 s. Meanwhile the user lets the keyboard sleep, wakes it,
+        plugs in USB-C, changes the backlight, and unplugs and replugs the receiver.
+- [ ] The user runs it from a CI artifact (`docs/dev/deploy-to-host.md`). This needs read and
+      write access to the hidraw node, so a temporary udev rule or `sudo`. Results go in
+      `docs/dev/spikes.md`, and the raw captures are saved as test fixtures.
+- **Settles:**
+  - Which driver is bound to the Bolt receiver.
+  - What a sleeping device looks like (link-down notification vs. error vs. timeout).
+  - Whether 0x1004 sends an event for every percentage change, which decides `battery_refresh`.
+  - Whether `openlogi-hidpp` handles the MX Keys S correctly.
+
+#### M17: Sub-devices and the generic peripheral model
+- [ ] Core sub-devices.
+      - `ctx.device(DeviceSpec) -> DeviceHandle`, with
+        `DeviceSpec { key, name, manufacturer, model, model_id, serial_number, sw_version, hw_version, via }`.
+      - `EntitySpec::on_device(&handle)`; entities default to the main device.
+      - Updates re-render discovery through the 1 s debounce.
+      - A device without entities or handles is removed after the 30 s grace period.
+      - Generic: nothing Logitech-specific.
+- [ ] MQTT.
+      - One retained document per device at `homeassistant/device/deskhand_<node>_<key>/config`,
+        with `via_device` and the main device's availability topics.
+      - Stale cleanup reads the retained `deskhand_<node>_*` documents and clears the ones that
+        are gone.
+      - `uninstall` and `print-discovery` cover sub-devices.
+      - insta snapshots and a broker test for stale-device removal.
+- [ ] `deskhand-common/src/peripherals.rs`.
+      - `PeripheralSource` (`id`, `probe`, `run(sink)`) and `PeripheralSink`. The sink takes
+        readings and removals and lets a source register extra entities for a peripheral it owns.
+      - Merging, devices and entities, and the `PeripheralBattery` integration.
+      - Probe: available if any source is.
+      - Per-source backoff (1 s → 60 s), re-probing on resume and every 5 min.
+      - `ready()` after the first report from each source, or after 5 s.
+- [ ] Config: `[integrations.peripheral_battery] upower = "auto"; hidpp = "auto"; controls = []`.
+- [ ] Split `UPowerPeripherals` out of `upower.rs`, filling `State`, `BatteryLevel`/`WarningLevel`,
+      `IsPresent` and `UpdateTime`. Split the existing mock test, keeping the
+      `battery_mx_master_3` assertion.
+- [ ] Merge tests on paused time:
+      - One entity when both sources report a device, with HID++ preferred.
+      - When HID++ stops, UPower takes over.
+      - Each source works alone.
+      - The laptop `battery` capability is unaffected.
+- [ ] Check in the dev HA whether moving `battery_<model>` to a sub-device keeps its entity ID and
+      history. CHANGELOG: per-peripheral devices and the new `status/peripheral_battery` topic.
+
+#### M18: HID++ source
+- [ ] `crates/deskhand-hidpp` (platform-neutral) wrapping `hidpp` in one adapter module.
+      - `HidBackend` trait (`enumerate`, `open -> RawHidChannel`, `hotplug`), so macOS IOHID and
+        Windows HID can be added later.
+      - `Leased` software IDs, so Solaar, OpenLogi or the kernel driver can share the node.
+- [ ] Receiver task.
+      - Set notification flags (`hid-generic` sets none).
+      - Collect pairings (slot, WPID, kind, unit ID/serial, codename) and the receiver's unique ID
+        and firmware.
+      - Trigger device arrival, so link states arrive without contacting sleeping devices.
+- [ ] Device on link-up.
+      - Feature discovery once, then identity, then one battery read: 0x1004, else 0x1000, else
+        0x1001.
+      - After that, battery comes only from the device's own events.
+      - Link down: `connected` turns off and the values stay.
+      - A link-up or 0x1D4B reconnect triggers one re-read.
+      - A sleeping device is never queried.
+      - `battery_refresh` (default `off`, set by M16) re-reads only connected devices.
+- [ ] Receiver gone (`ENODEV`, read error): its devices report disconnected and the source waits
+      for hotplug. Unpairing removes the device.
+- [ ] `deskhand-linux/src/hidraw.rs`.
+      - Enumerates `/sys/class/hidraw/*/device` (vendor 046d) and picks the interface from the
+        report descriptor (vendor page 0xFF00, report IDs 0x10/0x11).
+      - I/O with `AsyncFd`; hotplug with inotify on `/dev`.
+      - Probe reason for `EACCES` points to the udev rule.
+- [ ] Wiring: feature `hidpp` (in `default` and `linux`); `doctor` shows receivers, driver,
+      permissions, slots and batteries.
+- [ ] `packaging/udev/70-deskhand-logitech.rules` (`TAG+="uaccess"` for Logitech receivers and
+      HID++ Bluetooth devices).
+      - Installed to `$out/lib/udev/rules.d`; docs for NixOS `services.udev.packages` and for
+        installing it by hand from the tarball.
+      - Security note: same access as Solaar.
+- [ ] Tests with a `MockReceiver: RawHidChannel` and replays of the M16 captures:
+      - Startup with a sleeping device.
+      - Wake gives exactly one read.
+      - Events arrive without requests (polling check).
+      - Receiver loss and return inside the grace period.
+      - Unpairing.
+      - Devices with only 0x1000 or only 0x1001.
+      - Sysfs fixture tree for enumeration.
+
+#### M19: Backlight, docs, host check
+- [ ] Backlight (0x1982), opt-in with `controls = ["backlight"]`.
+      - `battery_<model>_backlight` switch and `_backlight_level` number.
+      - Config-category numbers for the hands-out, hands-in and powered timeouts.
+      - Device-side changes come back through events.
+- [ ] Docs: entities, configuration (udev), and an HA example "keyboard battery low".
+- [ ] A "Future HID++ controls" section:
+      - Host switching (0x1814/0x1815).
+      - Key and button diversion (0x1B04) to an `event` entity.
+      - Fn inversion (0x40A3), disabled keys (0x4521) and OS mode (0x4531).
+      - Mouse DPI (0x2201), SmartShift (0x2111), hi-res wheel (0x2121) and thumbwheel (0x2150).
+      - Bluetooth-direct HID++, and BlueZ devices as sub-devices.
+      - Never pairing or unpairing over MQTT.
+- **Accept:** on the KDE host, with the CI artifact and udev rule:
+  - `doctor` lists the Bolt receiver and the MX Keys S.
+  - HA shows "MX Keys S", via the receiver, via the desktop, with model, model ID, serial,
+    firmware, battery, state, low, connected and updated.
+  - Sleeping turns `connected` off and keeps the value; a key press refreshes `updated`.
+  - USB-C gives `charging`.
+  - Replugging the receiver leaves no duplicates.
+  - With UPower stopped, the keyboard still updates.
+  - The backlight works both ways.
+
 ## 7. Security principles (apply throughout)
 - MQTT never carries commands to execute. Scripts, systemd units and KDE shortcuts are allowlisted
   in config.
@@ -1072,6 +1252,7 @@ run locally.
 | 2026-11-02 | M14 | README, configuration, entities and Home Assistant docs, SECURITY, CONTRIBUTING, CHANGELOG; three blueprints; packaging script shared by CI and a new tag-driven release workflow (draft release, x86_64 and aarch64). Checked by following the README in the VM to a working device, loading every documented automation and blueprint into the dev HA, and running the actionable-notification blueprint (fixed: click followed by close). Setup now uses Nix profile links. Fixed VM 9p stale-binary segfaults in `vm-deploy`. **V1 milestones complete** |
 | 2026-11-02 | Release | v0.1.0 tagged. Resume from suspend (M6) and the browser call with camera and muted mic (M9) were assumed good for the tag, to be confirmed on the KDE host |
 | 2026-11-02 | 0.1.1 | With the user: no power buttons by default (`power.buttons = []`; suspend, hibernate, restart, shut down and logout are opt-in, like remote unlock); `deskhand setup` asks which (`--power-buttons` for `--yes`). The v0.1.0 draft is not published; 0.1.1 is the first release |
+| 2026-11-04 | Planning | M16–M19 planned with the user: Logitech HID++ peripheral batteries (MX Keys S on Bolt is invisible to the kernel and UPower). Generic `peripheral_battery` integration merging UPower and HID++ sources, per-peripheral HA devices (accepted one-time move of `battery_<model>`), `openlogi-hidpp` (0BSD) for the protocol (needs Rust 1.99), backlight the only opt-in control |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.
