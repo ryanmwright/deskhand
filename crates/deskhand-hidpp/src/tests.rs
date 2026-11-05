@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use deskhand_common::PeripheralBattery;
-use deskhand_common::peripherals::{CAPABILITY, PeripheralSource};
+use deskhand_common::peripherals::{
+    CAPABILITY, PeripheralReading, PeripheralSink, PeripheralSource,
+};
 use deskhand_core::entity::CommandValue;
 use deskhand_core::testing::{TestRig, rig_with, wait_attr, wait_entity, wait_spec, wait_state};
 use deskhand_core::{Config, EntityId, State};
@@ -668,4 +670,60 @@ async fn backlight_commands_wait_for_an_awake_keyboard() {
     assert_eq!(rx.requests_to(1).len(), before, "asked a sleeping keyboard");
     assert_eq!(t.state(&id(LEVEL)), Some(&State::Float(2.0)));
     assert_eq!(rx.backlight(1), Some(MockBacklight::mx_keys_s()));
+}
+
+/// A source like UPower on a kernel-driven receiver: the kernel's name for
+/// the device and the receiver's unit id as the serial.
+struct KernelSource(PeripheralReading);
+
+#[async_trait::async_trait]
+impl PeripheralSource for KernelSource {
+    fn id(&self) -> &'static str {
+        "upower"
+    }
+
+    async fn probe(&self) -> deskhand_core::Probe {
+        deskhand_core::Probe::available()
+    }
+
+    async fn run(
+        &self,
+        sink: PeripheralSink,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<(), deskhand_core::IntegrationError> {
+        sink.update(self.0.clone());
+        sink.ready();
+        cancel.cancelled().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn the_receivers_unit_id_joins_the_kernels_reading() {
+    let (backend, _rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
+    let kernel = KernelSource(PeripheralReading {
+        model: Some("Logitech MX Keys S".into()),
+        serial: Some("11-22-33-44".into()),
+        percentage: Some(100.0),
+        ..PeripheralReading::new(id("Logitech MX Keys S"), "Logitech MX Keys S")
+    });
+    let source = HidppSource::new(backend.clone()).with_timing(TIMING);
+    let config = Config::from_toml_str("", None)
+        .unwrap()
+        .integration(CAPABILITY)
+        .unwrap();
+    let mut t = rig_with(
+        PeripheralBattery::new(vec![Arc::new(source), Arc::new(kernel)]),
+        config,
+    )
+    .0;
+    let joined = id("battery_logitech_mx_keys_s");
+    wait_attr(&mut t, &joined, "source", json!("hidpp")).await;
+    wait_attr(&mut t, &joined, "slot", json!(1)).await;
+    t.settle(Duration::from_secs(2)).await;
+    assert!(
+        !t.entities.contains(&id(BATTERY)),
+        "two devices: {:?}",
+        t.entities
+    );
 }

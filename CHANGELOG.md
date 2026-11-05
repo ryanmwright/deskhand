@@ -37,6 +37,10 @@ section of the tagged version as the release notes.
   switch, `_backlight_level`, `_backlight_mode` (automatic or manual) and the
   three fade-out timeouts. Changes made with the keyboard's keys show up right
   away; nothing is sent to a sleeping keyboard.
+- A mouse or keyboard on a receiver the kernel drives (Unifying, Lightspeed)
+  is one device, even though UPower and HID++ name it differently: the
+  receiver's unit ID (the kernel's serial) joins them, and the UPower-era
+  entity id stays.
 - Per peripheral: `battery_<model>_state`, `_low`, `_connected` and
   `_updated` (time of the last reading). A sleeping peripheral keeps its last
   battery value; only `connected` turns off.

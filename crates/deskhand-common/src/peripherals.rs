@@ -32,8 +32,11 @@
 //!
 //! `<key>` is the slug of the model name (else the serial), the same rule
 //! for every source, so a device seen by two sources is one device. If the
-//! names differ, a matching serial joins them. Sources earlier in the list
-//! win while their reading says connected.
+//! names differ, a matching serial (or another id a source knows the device
+//! by, such as a receiver's unit id) joins them. Sources earlier in the list
+//! win while their reading says connected. A joined device keeps the key of
+//! the latest source in the list that reported it (UPower's, so ids from
+//! 0.1.x stay), and never goes back to an earlier source's key.
 //!
 //! A sleeping or disconnected peripheral keeps its entities and last values;
 //! only `connected` turns off. Entities go when no source reports the device
@@ -272,6 +275,9 @@ pub struct PeripheralReading {
     pub model: Option<String>,
     pub model_id: Option<String>,
     pub serial: Option<String>,
+    /// Other ids other sources may report as the serial (a receiver's unit
+    /// id, which the Linux kernel reports as the serial). Only for joining.
+    pub alt_serials: Vec<String>,
     pub firmware: Option<String>,
     pub link: Link,
     pub percentage: Option<f64>,
@@ -300,6 +306,7 @@ impl PeripheralReading {
             model: None,
             model_id: None,
             serial: None,
+            alt_serials: Vec::new(),
             firmware: None,
             link: Link::default(),
             percentage: None,
@@ -323,6 +330,15 @@ impl PeripheralReading {
             .find(|s| !s.is_empty())
             .unwrap_or(fallback);
         EntityId::slugify(text)
+    }
+
+    /// Serials and alternative ids, normalised for comparing.
+    fn ids(&self) -> impl Iterator<Item = String> + '_ {
+        self.serial
+            .iter()
+            .chain(&self.alt_serials)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
     }
 
     /// Whether the battery is low: the device's flag, else its level, else
@@ -938,6 +954,9 @@ struct Kit {
     readings: BTreeMap<EntityId, BTreeMap<&'static str, PeripheralReading>>,
     /// (source, the key it reported) → merged key, for serial matches.
     aliases: BTreeMap<(&'static str, EntityId), EntityId>,
+    /// Merged key → rank of the source whose key it is. Only a later
+    /// source's key replaces it.
+    key_rank: BTreeMap<EntityId, usize>,
     receivers: BTreeMap<EntityId, BTreeMap<&'static str, ReceiverReading>>,
     entities: BTreeMap<EntityId, PeripheralEntities>,
     receiver_entities: BTreeMap<EntityId, ReceiverEntities>,
@@ -958,6 +977,7 @@ impl Kit {
             order,
             readings: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            key_rank: BTreeMap::new(),
             receivers: BTreeMap::new(),
             entities: BTreeMap::new(),
             receiver_entities: BTreeMap::new(),
@@ -972,7 +992,7 @@ impl Kit {
     }
 
     /// The merged key for a reading: its own key if known, else the key of
-    /// a device with the same serial reported by another source.
+    /// a device with a matching serial or alternative id from another source.
     fn resolve(&mut self, source: &'static str, r: &PeripheralReading) -> EntityId {
         if let Some(key) = self.aliases.get(&(source, r.key.clone())) {
             return key.clone();
@@ -980,16 +1000,16 @@ impl Kit {
         let key = if self.readings.contains_key(&r.key) {
             r.key.clone()
         } else {
-            r.serial
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .and_then(|serial| {
-                    self.readings.iter().find_map(|(k, by_source)| {
-                        by_source
-                            .values()
-                            .any(|o| o.serial.as_deref() == Some(serial))
-                            .then(|| k.clone())
-                    })
+            let ids: BTreeSet<String> = r.ids().collect();
+            self.readings
+                .iter()
+                .find_map(|(k, by_source)| {
+                    // Only across sources: one source's devices are distinct.
+                    by_source
+                        .iter()
+                        .filter(|(s, _)| **s != source)
+                        .any(|(_, o)| o.ids().any(|id| ids.contains(&id)))
+                        .then(|| k.clone())
                 })
                 .unwrap_or_else(|| r.key.clone())
         };
@@ -997,14 +1017,49 @@ impl Kit {
         key
     }
 
+    /// Moves a joined device to the key of `source` if that source comes
+    /// later in the list than the one whose key it has now. Returns the key
+    /// the device ends up with.
+    fn rekey(
+        &mut self,
+        ctx: &Ctx,
+        key: EntityId,
+        source: &'static str,
+        own: &EntityId,
+    ) -> EntityId {
+        let rank = self.rank(source);
+        let current = *self.key_rank.entry(key.clone()).or_insert(rank);
+        if *own == key || rank <= current {
+            return key;
+        }
+        let Some(moved) = self.readings.remove(&key) else {
+            return key;
+        };
+        tracing::info!(from = %key, to = %own, source, "peripheral joined; using this source's key");
+        self.key_rank.remove(&key);
+        self.key_rank.insert(own.clone(), rank);
+        self.readings.entry(own.clone()).or_default().extend(moved);
+        for k in self.aliases.values_mut() {
+            if *k == key {
+                *k = own.clone();
+            }
+        }
+        // Old entities go (new ones are registered first by the refresh below).
+        self.refresh(ctx, own);
+        self.refresh(ctx, &key);
+        own.clone()
+    }
+
     fn apply(&mut self, ctx: &Ctx, msg: Msg) {
         match msg {
             Msg::Update(source, r) => {
                 let key = self.resolve(source, &r);
+                let own = r.key.clone();
                 self.readings
                     .entry(key.clone())
                     .or_default()
                     .insert(source, r);
+                let key = self.rekey(ctx, key, source, &own);
                 self.refresh(ctx, &key);
             }
             Msg::Remove(source, reported) => {
@@ -1134,6 +1189,7 @@ impl Kit {
     fn refresh(&mut self, ctx: &Ctx, key: &EntityId) {
         let Some((source, r)) = self.merged(key) else {
             self.readings.remove(key);
+            self.key_rank.remove(key);
             if self.entities.remove(key).is_some() {
                 tracing::info!(%key, "peripheral gone");
             }
@@ -1443,6 +1499,58 @@ mod tests {
         // Longer than the test rig's removal grace: still there.
         t.settle(Duration::from_secs(2)).await;
         assert!(t.entities.contains(&id("battery_mx_keys_s")));
+    }
+
+    #[tokio::test]
+    async fn a_unit_id_joins_and_the_later_source_keeps_its_key() {
+        // The G305 on a Lightspeed receiver: the kernel (UPower) calls it
+        // "Logitech G305" with the receiver's unit id as serial; HID++ knows
+        // it as "G305" and reads the unit id from the receiver.
+        let mouse = |key: &str, name: &str, percentage: f64| PeripheralReading {
+            kind: Some("mouse".into()),
+            model: Some(name.into()),
+            percentage: Some(percentage),
+            ..PeripheralReading::new(EntityId::slugify(key), name)
+        };
+        let (hidpp, hid_tx) = source("hidpp");
+        let (upower, up_tx) = source("upower");
+        let mut t = start("", vec![hidpp, upower]);
+        // HID++ first: its key for now.
+        hid_tx
+            .send(FakeMsg::Update(PeripheralReading {
+                alt_serials: vec!["16-FC-6E-8E".into()],
+                ..mouse("G305", "G305 Lightspeed Wireless Gaming Mouse", 90.0)
+            }))
+            .unwrap();
+        wait_state(&mut t, &id("battery_g305"), State::Float(90.0)).await;
+        up_tx
+            .send(FakeMsg::Update(PeripheralReading {
+                serial: Some("16-fc-6e-8e".into()),
+                ..mouse("Logitech G305", "Logitech G305", 100.0)
+            }))
+            .unwrap();
+        // One device, under UPower's key, with HID++'s values.
+        wait_state(&mut t, &id("battery_logitech_g305"), State::Float(90.0)).await;
+        wait_attr(
+            &mut t,
+            &id("battery_logitech_g305"),
+            "source",
+            json!("hidpp"),
+        )
+        .await;
+        wait_entity(&mut t, &id("battery_g305"), false).await;
+
+        // UPower goes away: the key stays.
+        drop(up_tx);
+        hid_tx
+            .send(FakeMsg::Update(PeripheralReading {
+                alt_serials: vec!["16-FC-6E-8E".into()],
+                ..mouse("G305", "G305 Lightspeed Wireless Gaming Mouse", 85.0)
+            }))
+            .unwrap();
+        wait_state(&mut t, &id("battery_logitech_g305"), State::Float(85.0)).await;
+        t.settle(Duration::from_secs(2)).await;
+        assert!(!t.entities.contains(&id("battery_g305")));
     }
 
     #[tokio::test]

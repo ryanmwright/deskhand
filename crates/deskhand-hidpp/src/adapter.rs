@@ -497,6 +497,31 @@ impl ReceiverLink {
         .filter(|s| !s.is_empty())
     }
 
+    /// The unit id the receiver stores for the device in `slot`, formatted
+    /// as the Linux kernel reports it as the serial (`16-fc-6e-8e`), so the
+    /// kernel's (UPower's) reading of the same device can be joined.
+    pub async fn unit_id(&self, slot: u8) -> Option<String> {
+        let (sub, at) = match self.kind {
+            // Bolt pairing information: [sub, kind, wpid, wpid, unit id...].
+            ReceiverKind::Bolt => (0x50 + (slot & 0x0f), 4),
+            // Unifying extended pairing information, as the kernel reads it:
+            // 0x30 + (slot - 1): [sub, unit id...].
+            ReceiverKind::Unifying => (0x30 + slot.checked_sub(1)?, 1),
+        };
+        let r = self
+            .chan
+            .read_long_sub_register(RECEIVER_DEVICE_INDEX, 0xb5, sub, [0, 0])
+            .await
+            .ok()?;
+        let id = &r[at..at + 4];
+        (id.iter().any(|b| *b != 0)).then(|| {
+            id.iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join("-")
+        })
+    }
+
     /// Opens the device in `slot`: protocol check, feature lookup, identity
     /// and nothing else; 0x1982 only with `backlight`. Only call this while
     /// the receiver says it's online.

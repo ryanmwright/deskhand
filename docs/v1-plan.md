@@ -1322,7 +1322,23 @@ M15.
   - The backlight works both ways.
   - The timeouts are in 5 s units: HA's `_backlight_timeout_hands_out` shows 15 s for the M16
     value 3, and a value set in HA matches what Solaar or Logi Options+ shows.
-- **Status:** code, mock tests and docs done (2026-11-05); the host check above is still open.
+- **Status:** code, mock tests and docs done (2026-11-05). Host check (2026-11-05, Nix flake
+  build on the KDE host): `doctor` lists the Bolt receiver (`hid-generic`) with the MX Keys S and
+  the Unifying/Lightspeed receiver (`logitech-djreceiver`) with a G305; HA shows the MX Keys S
+  with model ID `B378`; USB-C gives `charging`; with UPower stopped the keyboard still updates;
+  the backlight works both ways; a simulated replug (USB `authorized` 0 for 5 s) shows the
+  keyboard disconnected, then reconnected, with no duplicates. The Bolt receiver does not answer
+  register 0xF1, so its device has no firmware (the Unifying one does). Still open: sleep and
+  wake.
+  - **Found on the host: the G305 was two devices.** On the Lightspeed receiver
+    (`logitech-djreceiver`) the kernel reports it to UPower as "Logitech G305" with serial
+    `16-fc-6e-8e`, the receiver's unit id (`%4phD`); HID++ keyed it by the receiver's codename
+    "G305", with no serial. Fix: the HID++ source reads the unit id (Bolt `0xB5 0x5N` bytes
+    4..8; Unifying `0xB5 0x30+(n-1)` bytes 1..5, as the kernel does) and reports it in
+    `alt_serials`; the kit joins on serials and alternative ids across sources only. A joined
+    device takes the key of the latest source in the list (UPower: the 0.1.x id stays) and never
+    goes back to an earlier source's key, whatever order the sources report in. To check on the
+    host after the update: one G305 device, `sensor.homepc_logitech_g305_battery`.
   Deviations:
   - **Mode select.** Setting a level switches the keyboard to permanent manual mode (the only
     mode where a level holds, as in Solaar), so a `_backlight_mode` select (`automatic`,

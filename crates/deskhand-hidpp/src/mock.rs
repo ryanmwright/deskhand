@@ -338,7 +338,8 @@ fn register(s: &mut State, req: &[u8]) -> Vec<Vec<u8>> {
                 0x50 => {
                     let [lo, hi] = d.wpid.to_le_bytes();
                     let status = d.kind | if d.online { 0 } else { 0x40 };
-                    vec![long(&[info, status, lo, hi, 0x11, 0x22, 0x33, 0x44])]
+                    // Unit id 11 22 33 44 for slot 1, 11 22 33 45 for slot 2, ...
+                    vec![long(&[info, status, lo, hi, 0x11, 0x22, 0x33, 0x43 + slot])]
                 }
                 // Chunk 1: [sub, 1, length, 13 bytes]; chunk 2: [sub, 2, rest].
                 0x60 => {

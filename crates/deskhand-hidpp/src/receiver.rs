@@ -69,6 +69,8 @@ struct Slot {
     encrypted: bool,
     online: bool,
     codename: Option<String>,
+    /// The receiver's unit id for the device (the kernel's serial).
+    unit_id: Option<String>,
     /// Fixed once reported, so a later name cannot move the entities.
     key: Option<EntityId>,
     device: Option<Arc<DeviceLink>>,
@@ -92,6 +94,7 @@ impl Slot {
             encrypted,
             online: false,
             codename: None,
+            unit_id: None,
             key: None,
             device: None,
             battery: None,
@@ -287,6 +290,7 @@ impl State {
                     });
                     let mut s = Slot::new(wpid, kind, encrypted, controller);
                     s.codename = self.link.codename(slot).await;
+                    s.unit_id = self.link.unit_id(slot).await;
                     self.slots.insert(slot, s);
                 }
                 let Some(s) = self.slots.get_mut(&slot) else {
@@ -569,6 +573,7 @@ impl State {
             model: Some(name.to_owned()),
             model_id: Some(format!("{:04X}", s.wpid)),
             serial: identity.serial,
+            alt_serials: s.unit_id.iter().cloned().collect(),
             firmware: identity.firmware,
             link: Link {
                 receiver: Some(receiver),
