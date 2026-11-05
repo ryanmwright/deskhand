@@ -18,6 +18,7 @@ session there.
 | 6 | libpulse mic filters | **works** (corked streams not exercised) |
 | 7 | Camera `/proc` scan + inotify | **works** |
 | 8 | logind session from a user service | **works**, but use `User.Display` first |
+| 9 | Logitech HID++ (M16) | **pending** the run on the KDE host |
 
 ## 1. Idle (`idle_probe`)
 
@@ -142,6 +143,64 @@ streams:
   (LockedHint) work as planned.
 - `CanSuspend` etc. are `yes` from the user service of the active local session; from a remote
   session polkit says `challenge`.
+
+## 9. Logitech HID++ (`hidpp_probe`, M16)
+
+**Status: waiting for the run on the KDE host** (MX Keys S on a Logi Bolt receiver). This dev
+host and the Plasma VM have no Logitech hardware.
+
+The probe (`crates/deskhand-linux/examples/hidpp_probe.rs`) talks HID++ through
+`openlogi-hidpp` over Deskhand's own hidraw channel (`deskhand_linux::hidraw`). It prints and
+captures:
+- every hidraw node with its bus, vendor:product, bound driver, and whether it opens read-write;
+- per Logitech receiver: unique ID, notification flags, pairings and codenames, and device
+  arrival;
+- per device: the protocol version, the feature table, identity (0x0003/0x0005/0x0007), battery
+  (0x1004/0x1000/0x1001) and backlight (0x1982);
+- then, for 120 s, connection events and decoded battery, backlight and wireless-status events.
+
+Every report in both directions goes to `hidpp-capture.txt`, timestamped and in hex. The probe
+enables the receiver's wireless and software-present notification flags and restores them on
+exit; it changes nothing else.
+
+### Running it on the host
+
+```sh
+gh run download --repo ryanmwright/deskhand --name hidpp-probe-x86_64-linux-gnu
+chmod +x target/release/examples/hidpp_probe
+# 1. As yourself: shows the node permissions (expect "rw FAILED: Permission denied").
+target/release/examples/hidpp_probe 1 /tmp/hidpp-perms.txt
+# 2. With access, for the full run (or install the udev rule below and re-plug the receiver).
+sudo target/release/examples/hidpp_probe 120 hidpp-capture.txt
+```
+
+During the 120 s, with the time of each step noted:
+1. Leave the keyboard untouched until it sleeps (backlight off), then press a key.
+2. Plug in the USB-C cable for 20 s, then unplug it.
+3. Change the backlight with its keys (up, down, off).
+4. Unplug the receiver for 10 s, then plug it back in.
+
+Send both capture files back. The udev rule for running without `sudo`
+(`data/udev/70-deskhand-logitech.rules`, also in the artifact):
+
+```sh
+sudo install -m644 data/udev/70-deskhand-logitech.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+### Questions the run answers
+
+| Question | Answer |
+|---|---|
+| Driver bound to the Bolt receiver (why UPower shows nothing) | |
+| Pairings: slot, WPID, unit ID, codename of the MX Keys S | |
+| A request to a sleeping device: error, timeout, or answered? (time) | |
+| Link down/up notifications (0x41) on sleep and wake? | |
+| 0x1004: percentage, levels, charging states; an event per % change? | |
+| 0x0003: model IDs, firmware entities, serial number | |
+| 0x1982: backlight config; events for key changes? | |
+| Receiver unplug and replug: what the channel sees | |
+| `battery_refresh` needed? | |
 
 ## Incidental
 

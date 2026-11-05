@@ -17,7 +17,7 @@ Deskhand is a daemon that exposes a desktop machine to MQTT and Home Assistant: 
 
 ## Tech stack
 
-- **Language:** Rust (stable), edition 2024, `rust-version = 1.95` (sysinfo 0.40 requires it). The toolchain comes from nixpkgs through the flake devShell.
+- **Language:** Rust (stable), edition 2024, `rust-version = 1.99` (`openlogi-hidpp` requires it). The toolchain comes from the flake's `nixpkgs-rust` input (nixos-unstable, until nixos-26.11 has 1.99), for the devShell and crane alike.
 - **Async runtime:** `tokio`.
 - **MQTT:** `rumqttc` (MQTT 3.1.1, rustls with the `ring` provider). Home Assistant discovery is done by publishing device-based discovery JSON.
 - **Config:** `serde` with TOML. Use `directories` for XDG and platform config paths.

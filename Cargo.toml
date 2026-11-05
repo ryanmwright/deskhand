@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 authors = ["Deskhand contributors"]
 
@@ -31,6 +31,7 @@ tokio-util = "0.7.20"
 async-trait = "0.1.92"
 bytes = "1.12"
 base64 = "0.22.1"
+async-channel = "2.5"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 
 # MQTT: rustls with the ring provider (aws-lc needs cmake/nasm)
@@ -72,6 +73,9 @@ wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 wayland-protocols-plasma = { version = "0.3.12", features = ["client"] }
 inotify = "0.11.5"
 libpulse-binding = "2.30.1"
+# Logitech HID++ (OpenLogi's fork of `hidpp`, 0BSD). Pinned exactly: its API changes
+# often. Used only behind one adapter module.
+hidpp = { package = "openlogi-hidpp", version = "=0.9.0" }
 # Safe kill(2) of a script's process group (the workspace denies unsafe code)
 rustix = { version = "1.1", default-features = false, features = ["std", "process", "event"] }
 

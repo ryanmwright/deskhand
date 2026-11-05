@@ -12,6 +12,8 @@ pub mod bluetooth;
 pub mod camera;
 pub mod env;
 pub mod gamemode;
+#[cfg(feature = "hidpp")]
+pub mod hidraw;
 pub mod identity;
 pub mod idle;
 pub mod lock;

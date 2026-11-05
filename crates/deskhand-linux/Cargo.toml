@@ -10,12 +10,14 @@ authors.workspace = true
 [features]
 default = ["audio-pulse"]
 audio-pulse = ["dep:libpulse-binding"]
+hidpp = ["dep:hidpp"]
 
 [dependencies]
 async-trait.workspace = true
 deskhand-common.workspace = true
 deskhand-core.workspace = true
 futures-util.workspace = true
+hidpp = { workspace = true, optional = true }
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,6 +30,8 @@ wayland-protocols.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
 deskhand-core = { workspace = true, features = ["test-util"] }
 deskhand-testkit.workspace = true
 bytes.workspace = true
@@ -38,6 +42,10 @@ tokio-util.workspace = true
 [[example]]
 name = "mic_probe"
 required-features = ["audio-pulse"]
+
+[[example]]
+name = "hidpp_probe"
+required-features = ["hidpp"]
 
 [lints]
 workspace = true

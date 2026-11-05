@@ -1,0 +1,12 @@
+# Lets the logged-in user talk Logitech HID++ over /dev/hidraw* (peripheral
+# batteries in Deskhand), like Solaar's rule. `uaccess` grants access to the
+# user of the active local session only, and must run before 73-seat-late.
+ACTION=="remove", GOTO="deskhand_logitech_end"
+SUBSYSTEM!="hidraw", GOTO="deskhand_logitech_end"
+
+# Receivers (Bolt, Unifying, Lightspeed) and devices on a USB cable.
+ATTRS{idVendor}=="046d", TAG+="uaccess", GOTO="deskhand_logitech_end"
+# Devices paired directly over Bluetooth.
+KERNELS=="0005:046D:*", TAG+="uaccess"
+
+LABEL="deskhand_logitech_end"

@@ -3,6 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # Rust toolchain only: openlogi-hidpp needs Rust 1.99, nixos-26.05 has 1.95.
+    # Drop this input (and `rustFor`) once the stable channel has 1.99 (nixos-26.11).
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
     crane.url = "github:ipetkov/crane";
   };
 
@@ -10,6 +13,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-rust,
       crane,
     }:
     let
@@ -19,13 +23,34 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      # rustc, cargo, clippy and rustfmt from nixpkgs-rust; everything else from nixpkgs.
+      rustFor = pkgs: {
+        inherit (nixpkgs-rust.legacyPackages.${pkgs.stdenv.hostPlatform.system})
+          rustc
+          cargo
+          clippy
+          rustfmt
+          rust-analyzer
+          ;
+        inherit (nixpkgs-rust.legacyPackages.${pkgs.stdenv.hostPlatform.system}.rustPlatform) rustLibSrc;
+      };
 
       # Shared by the package and the checks. The dependencies are built once
       # (`cargoArtifacts`); a change to Deskhand only rebuilds its own crates.
       commonFor =
         pkgs:
         let
-          craneLib = crane.mkLib pkgs;
+          rust = rustFor pkgs;
+          craneLib = (crane.mkLib pkgs).overrideScope (
+            _final: _prev: {
+              inherit (rust)
+                rustc
+                cargo
+                clippy
+                rustfmt
+                ;
+            }
+          );
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
@@ -118,39 +143,47 @@
         }
       );
 
-      devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            # Rust toolchain from nixpkgs (no overlay)
-            rustc
-            cargo
-            clippy
-            rustfmt
-            rust-analyzer
-            # Native deps
-            pkg-config
-            libpulseaudio
-            # Test and dev tools
-            dbus # dbus-daemon for private test buses
-            mosquitto # mosquitto_sub / mosquitto_pub
-            cargo-deny
-            cargo-insta
-            just
-            jq
-            curl
-            nixfmt
-            socat # VM monitor (just vm-screenshot)
-          ];
-          RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
-          shellHook = ''
-            # testcontainers talks to the Docker API; point it at rootless podman if that is what we have.
-            if [ -z "''${DOCKER_HOST:-}" ] && [ -S "''${XDG_RUNTIME_DIR:-/run/user/$UID}/podman/podman.sock" ]; then
-              export DOCKER_HOST="unix://''${XDG_RUNTIME_DIR:-/run/user/$UID}/podman/podman.sock"
-              export TESTCONTAINERS_RYUK_DISABLED=true
-            fi
-          '';
-        };
-      });
+      devShells = forAllSystems (
+        pkgs:
+        let
+          rust = rustFor pkgs;
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [
+              # Rust toolchain from nixpkgs-rust (no overlay)
+              rust.rustc
+              rust.cargo
+              rust.clippy
+              rust.rustfmt
+              rust.rust-analyzer
+            ]
+            ++ (with pkgs; [
+              # Native deps
+              pkg-config
+              libpulseaudio
+              # Test and dev tools
+              dbus # dbus-daemon for private test buses
+              mosquitto # mosquitto_sub / mosquitto_pub
+              cargo-deny
+              cargo-insta
+              just
+              jq
+              curl
+              nixfmt
+              socat # VM monitor (just vm-screenshot)
+            ]);
+            RUST_SRC_PATH = "${rust.rustLibSrc}";
+            shellHook = ''
+              # testcontainers talks to the Docker API; point it at rootless podman if that is what we have.
+              if [ -z "''${DOCKER_HOST:-}" ] && [ -S "''${XDG_RUNTIME_DIR:-/run/user/$UID}/podman/podman.sock" ]; then
+                export DOCKER_HOST="unix://''${XDG_RUNTIME_DIR:-/run/user/$UID}/podman/podman.sock"
+                export TESTCONTAINERS_RYUK_DISABLED=true
+              fi
+            '';
+          };
+        }
+      );
 
       # Plasma 6 Wayland test VM (nix/plasma-vm.nix). x86_64 only: it needs KVM.
       nixosConfigurations.plasma-vm = nixpkgs.lib.nixosSystem {

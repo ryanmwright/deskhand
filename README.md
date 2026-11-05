@@ -90,7 +90,7 @@ services.deskhand = {
 };
 ```
 
-**From source:** Rust 1.95 or newer and libpulse headers (`libpulse-dev`,
+**From source:** Rust 1.99 or newer and libpulse headers (`libpulse-dev`,
 `pulseaudio-libs-devel`), then
 `cargo install --locked --git https://github.com/ryanmwright/deskhand deskhand`.
 

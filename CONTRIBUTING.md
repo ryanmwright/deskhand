@@ -23,7 +23,7 @@ just ci          # fmt check, clippy -D warnings, tests, cargo-deny: what CI run
 | `just e2e` | the end-to-end NixOS test (Plasma, broker, packaged daemon) |
 | `just flake-check` | every Nix check |
 
-Without Nix you need Rust 1.95+, libpulse headers and `dbus-daemon`; D-Bus
+Without Nix you need Rust 1.99+, libpulse headers and `dbus-daemon`; D-Bus
 tests skip themselves when `dbus-daemon` is missing (outside CI).
 
 [AGENTS.md](AGENTS.md) has more detail on the dev environment, and
