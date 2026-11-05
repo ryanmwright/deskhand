@@ -16,6 +16,7 @@ ignore = [
     { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
     { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102 not used for verification (rumqttc error type only)" },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is unmaintained; pulled in by rumqttc" },
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar is unmaintained; dev-only, via testcontainers (broker integration tests), not in the binary" },
     # zbus 6 folded zvariant/zbus_names into zbus. We stay on zbus 5 until ksni supports 6
     # (docs/v1-plan.md §3).
     { id = "RUSTSEC-2026-0370", reason = "zbus 5 pin until ksni supports zbus 6" },

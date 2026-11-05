@@ -129,6 +129,7 @@ The other options, by capability:
 | `camera` | `ignore_processes` | `[]` | Processes whose camera use doesn't count. |
 | `peripheral_battery` | `sources` | all `"auto"` | Per source, `"auto"`, `true` or `false`: `[integrations.peripheral_battery.sources]` with `upower = false` turns off UPower's peripheral batteries, `hidpp = false` the [Logitech receivers](#logitech-receivers). |
 | `peripheral_battery` | `battery_refresh` | `"off"` | Also re-read connected Logitech devices this often (at least `"1m"`). Not needed: they report every change themselves, and every wake from sleep. |
+| `peripheral_battery` | `controls` | `[]` | Settings Home Assistant may change on peripherals. `["backlight"]`: the [keyboard backlight](entities.md#keyboard-backlight) of Logitech keyboards. Without it, Deskhand doesn't touch the backlight. |
 | `bluetooth` | `devices` | `"paired"` | `"paired"`, or a list of addresses (`["AA:BB:CC:DD:EE:FF"]`), for the per-device connect switches. |
 | `systemd` | `units` | `[]` | systemd **user** units Home Assistant may start and stop, by full name. Only these. |
 | `metrics` | `interval` | `"30s"` | |
@@ -250,6 +251,16 @@ Running headless as another user would need a group-based rule instead
 Once the rule is in place, Deskhand picks the receiver up within five minutes,
 or right away after `systemctl --user restart deskhand`. Receivers plugged in
 later are found at once.
+
+Battery readings only listen. Changing a setting on a device is opt-in, one
+setting at a time; so far that's the keyboard backlight:
+
+```toml
+[integrations.peripheral_battery]
+controls = ["backlight"]
+```
+
+Deskhand never pairs or unpairs devices; use Logi Options+ or Solaar for that.
 
 ## Home Manager
 

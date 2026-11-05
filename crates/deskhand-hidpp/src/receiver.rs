@@ -11,13 +11,17 @@
 //!   `battery_refresh` is set, and then only connected devices are read.
 //! - Link down: `connected` turns off and the values stay. A sleeping device
 //!   is never asked anything.
+//! - Backlight (opt-in): read once at discovery, then kept up to date by the
+//!   device's 0x1982 events; Home Assistant's changes are written while the
+//!   device is connected.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use deskhand_common::peripherals::{
-    ChargeState, Link, PairedSlot, PeripheralReading, PeripheralSink, ReceiverReading,
+    Backlight, BacklightCommand, ChargeState, Control, Controller, Link, PairedSlot,
+    PeripheralReading, PeripheralSink, ReceiverReading,
 };
 use deskhand_core::EntityId;
 use tokio::sync::{mpsc, oneshot};
@@ -70,6 +74,9 @@ struct Slot {
     device: Option<Arc<DeviceLink>>,
     battery: Option<Battery>,
     read_at: Option<SystemTime>,
+    backlight: Option<Backlight>,
+    /// Routes Home Assistant's commands for this slot to the task.
+    controller: Controller,
     /// A discovery or read is running.
     busy: bool,
     /// When to read (or discover) unless the device reports first.
@@ -78,7 +85,7 @@ struct Slot {
 }
 
 impl Slot {
-    fn new(wpid: u16, kind: u8, encrypted: bool) -> Self {
+    fn new(wpid: u16, kind: u8, encrypted: bool, controller: Controller) -> Self {
         Self {
             wpid,
             kind,
@@ -89,6 +96,8 @@ impl Slot {
             device: None,
             battery: None,
             read_at: None,
+            backlight: None,
+            controller,
             busy: false,
             due: None,
             failures: 0,
@@ -103,9 +112,13 @@ impl Slot {
     }
 }
 
+type Discovery = (DeviceLink, Option<Battery>, Option<Backlight>);
+
 enum Job {
-    Discovered(Result<(DeviceLink, Option<Battery>), AdapterError>),
+    Discovered(Result<Discovery, AdapterError>),
     Read(Result<Option<Battery>, AdapterError>),
+    /// A backlight write, and the state read back.
+    Backlight(Result<Option<Backlight>, AdapterError>),
 }
 
 pub(crate) struct ReceiverTask {
@@ -125,6 +138,7 @@ struct State {
     reading: ReceiverReading,
     slots: BTreeMap<u8, Slot>,
     jobs: JoinSet<(u8, Job)>,
+    commands: mpsc::UnboundedSender<(u8, BacklightCommand)>,
 }
 
 impl ReceiverTask {
@@ -156,6 +170,7 @@ impl ReceiverTask {
         }
         let kind = link.kind();
         let key = EntityId::slugify(&format!("{}_{unique_id}", kind.key_prefix()));
+        let (commands, mut command_rx) = mpsc::unbounded_channel();
         let mut state = State {
             reading: ReceiverReading {
                 key: key.clone(),
@@ -172,6 +187,7 @@ impl ReceiverTask {
             timing,
             slots: BTreeMap::new(),
             jobs: JoinSet::new(),
+            commands,
         };
 
         // Device arrival: the 0x41 notices are queued before the ack.
@@ -202,6 +218,7 @@ impl ReceiverTask {
                     Some(n) => state.notice(n).await,
                     None => break Err(AdapterError::Gone),
                 },
+                Some((slot, cmd)) = command_rx.recv() => state.command(slot, cmd),
                 Some(done) = state.jobs.join_next(), if !state.jobs.is_empty() => {
                     if let Ok((slot, job)) = done
                         && let Err(AdapterError::Gone) = state.finished(slot, job)
@@ -264,7 +281,11 @@ impl State {
                     {
                         self.sink.remove(&key);
                     }
-                    let mut s = Slot::new(wpid, kind, encrypted);
+                    let tx = self.commands.clone();
+                    let controller = Controller::new(move |cmd| {
+                        let _ = tx.send((slot, cmd));
+                    });
+                    let mut s = Slot::new(wpid, kind, encrypted, controller);
                     s.codename = self.link.codename(slot).await;
                     self.slots.insert(slot, s);
                 }
@@ -317,6 +338,14 @@ impl State {
                         s.due = None;
                         self.report(slot);
                     }
+                    Some(DeviceEvent::Backlight(change)) => {
+                        if let Some(b) = &mut s.backlight {
+                            change.apply(b);
+                            self.report(slot);
+                        } else if woke {
+                            self.report(slot);
+                        }
+                    }
                     Some(DeviceEvent::Reconnected) => {
                         if s.due.is_none() && !s.busy {
                             s.due = Some(Instant::now() + self.timing.wake_read);
@@ -364,11 +393,21 @@ impl State {
         match s.device.clone() {
             None => {
                 let link = self.link.clone();
+                let backlight = self.sink.wants(Control::Backlight);
                 self.jobs.spawn(async move {
                     let job = async {
-                        let device = link.device(slot).await?;
+                        let device = link.device(slot, backlight).await?;
                         let battery = device.read_battery().await?;
-                        Ok((device, battery))
+                        // The backlight is extra: a failed read leaves it out.
+                        let backlight = match device.read_backlight().await {
+                            Ok(b) => b,
+                            Err(AdapterError::Gone) => return Err(AdapterError::Gone),
+                            Err(e) => {
+                                tracing::debug!(slot, error = %e, "backlight not read");
+                                None
+                            }
+                        };
+                        Ok((device, battery, backlight))
                     };
                     let r = tokio::time::timeout(timeout, job)
                         .await
@@ -385,6 +424,29 @@ impl State {
                 });
             }
         }
+    }
+
+    /// A backlight change from Home Assistant: written only to a connected,
+    /// discovered device with a backlight.
+    fn command(&mut self, slot: u8, cmd: BacklightCommand) {
+        let Some(s) = self.slots.get(&slot) else {
+            return;
+        };
+        let device = s
+            .device
+            .clone()
+            .filter(|_| s.online && s.backlight.is_some());
+        let Some(device) = device else {
+            tracing::info!(receiver = %self.key, slot, ?cmd, "device asleep; backlight command ignored");
+            return;
+        };
+        let timeout = self.timing.job_timeout;
+        self.jobs.spawn(async move {
+            let r = tokio::time::timeout(timeout, device.set_backlight(cmd))
+                .await
+                .unwrap_or(Err(AdapterError::Timeout));
+            (slot, Job::Backlight(r))
+        });
     }
 
     fn start_due(&mut self) {
@@ -420,22 +482,36 @@ impl State {
         let Some(s) = self.slots.get_mut(&slot) else {
             return Ok(());
         };
-        s.busy = false;
         let result = match job {
-            Job::Discovered(Ok((device, battery))) => {
+            Job::Backlight(r) => {
+                match r {
+                    Ok(b) => s.backlight = b.or(s.backlight),
+                    Err(AdapterError::Gone) => return Err(AdapterError::Gone),
+                    Err(e) => {
+                        tracing::warn!(receiver = %self.key, slot, error = %e, "backlight not changed")
+                    }
+                }
+                // Also after a failure: Home Assistant shows the real state again.
+                self.report(slot);
+                return Ok(());
+            }
+            Job::Discovered(Ok((device, battery, backlight))) => {
                 tracing::info!(
                     receiver = %self.key,
                     slot,
                     name = device.identity.name.as_deref().unwrap_or("?"),
                     battery = ?device.battery,
+                    backlight = backlight.is_some(),
                     "HID++ device discovered"
                 );
                 s.device = Some(Arc::new(device));
+                s.backlight = backlight;
                 Ok(battery)
             }
             Job::Read(Ok(battery)) => Ok(battery),
             Job::Discovered(Err(e)) | Job::Read(Err(e)) => Err(e),
         };
+        s.busy = false;
         match result {
             Ok(battery) => {
                 s.failures = 0;
@@ -506,6 +582,8 @@ impl State {
             low: b.and_then(|b| b.low),
             connected: s.online,
             read_at: s.read_at,
+            backlight: s.backlight,
+            controller: s.backlight.is_some().then(|| s.controller.clone()),
             ..PeripheralReading::new(key, name)
         });
     }

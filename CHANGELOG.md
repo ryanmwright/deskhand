@@ -32,6 +32,11 @@ section of the tagged version as the release notes.
   `deskhand udev-rule`, offered by `deskhand setup`, shipped in the tarball
   and the Nix package (`lib/udev/rules.d`). `deskhand doctor` lists receivers,
   paired devices and batteries. Cargo feature `hidpp` (default).
+- **Keyboard backlight** (Logitech, opt-in with `controls = ["backlight"]`
+  under `[integrations.peripheral_battery]`): `battery_<model>_backlight`
+  switch, `_backlight_level`, `_backlight_mode` (automatic or manual) and the
+  three fade-out timeouts. Changes made with the keyboard's keys show up right
+  away; nothing is sent to a sleeping keyboard.
 - Per peripheral: `battery_<model>_state`, `_low`, `_connected` and
   `_updated` (time of the last reading). A sleeping peripheral keeps its last
   battery value; only `connected` turns off.

@@ -66,6 +66,29 @@ example unpaired or unplugged), not while it sleeps. A Logitech keyboard keeps
 its last values while asleep (after about 10 minutes untouched) and while its
 receiver is unplugged; `updated` shows when it last reported.
 
+### Keyboard backlight
+
+Opt-in with `controls = ["backlight"]` under
+[`[integrations.peripheral_battery]`](configuration.md#integrationscapability),
+for Logitech keyboards with a backlight (HID++ feature 0x1982, such as the MX
+Keys and MX Keys S). On the keyboard's device:
+
+| Id | Type | |
+|---|---|---|
+| `battery_<key>_backlight` | switch | The backlight as a whole. On can still be dark: level 0, or a bright room in automatic mode. |
+| `battery_<key>_backlight_level` | number | `0` up to the keyboard's levels − 1 (`7` on the MX Keys S). Setting a level switches to manual mode, where it holds. |
+| `battery_<key>_backlight_mode` | select (config) | `automatic` (follows the light sensor) or `manual`. Only on keyboards with a light sensor. |
+| `battery_<key>_backlight_timeout_hands_out` | number, s (config) | How long it stays on after the last key press. |
+| `battery_<key>_backlight_timeout_hands_in` | number, s (config) | The same while your hands are still near the keyboard. |
+| `battery_<key>_backlight_timeout_powered` | number, s (config) | The same while it charges. |
+
+Timeouts go in 5-second steps, up to 2 hours. Changes made with the
+keyboard's own backlight keys show up right away. A sleeping keyboard can't be
+reached: changes made while it sleeps are dropped (the entities keep showing
+the keyboard's real state), so wake it with a key press first. The keyboard
+stores the settings itself, so they survive Deskhand and a restart of the
+keyboard.
+
 ## Media
 
 | Id | Type | |

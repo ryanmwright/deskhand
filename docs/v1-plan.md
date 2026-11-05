@@ -1297,12 +1297,12 @@ M15.
     sysfs tree of the KDE host for enumeration.
 
 #### M19: Backlight, docs, host check
-- [ ] Backlight (0x1982), opt-in with `controls = ["backlight"]`.
+- [x] Backlight (0x1982), opt-in with `controls = ["backlight"]`.
       - `battery_<model>_backlight` switch and `_backlight_level` number.
       - Config-category numbers for the hands-out, hands-in and powered timeouts.
       - Device-side changes come back through events.
-- [ ] Docs: entities, configuration (udev), and an HA example "keyboard battery low".
-- [ ] A "Future HID++ controls" section:
+- [x] Docs: entities, configuration (udev), and an HA example "keyboard battery low".
+- [x] A "Future HID++ controls" section:
       - Host switching (0x1814/0x1815).
       - Key and button diversion (0x1B04) to an `event` entity.
       - Fn inversion (0x40A3), disabled keys (0x4521) and OS mode (0x4531).
@@ -1320,6 +1320,29 @@ M15.
     hidraw nodes disappear and come back, as with a real replug.
   - With UPower stopped, the keyboard still updates.
   - The backlight works both ways.
+  - The timeouts are in 5 s units: HA's `_backlight_timeout_hands_out` shows 15 s for the M16
+    value 3, and a value set in HA matches what Solaar or Logi Options+ shows.
+- **Status:** code, mock tests and docs done (2026-11-05); the host check above is still open.
+  Deviations:
+  - **Mode select.** Setting a level switches the keyboard to permanent manual mode (the only
+    mode where a level holds, as in Solaar), so a `_backlight_mode` select (`automatic`,
+    `manual`; config category) was added to switch back to the light sensor. Only on keyboards
+    with a light sensor.
+  - **Model** (`deskhand-common`): `Control::Backlight`, `Backlight`, `BacklightCommand` and a
+    `Controller` on the reading that takes Home Assistant's commands back to the source. The
+    kit owns the entities (re-registered when the device info or the level count changes) and
+    drops commands while the reporting source says disconnected. `PeripheralSink::wants`
+    tells a source whether a control is on.
+  - **HID++:** 0x1982 is looked up (one more request) and read at discovery only with the
+    control on; then only its events (`backlightInfoEvent`). A key press is temporary manual and
+    leaves the configured mode alone. Writes read the configuration, change one field and write
+    it back (option bits and the fourth timeout as read; the level only in permanent manual
+    mode, like Solaar), then read back. A failed write re-reports the old state.
+  - **Timeouts:** seconds in HA (5 to 7200, step 5), rounded up to 5 s units, per Solaar and
+    `openlogi-hidpp`. The M16 values read 15 s / 30 s / 20 s; checked on the host.
+  - **Future HID++ controls** went into §8 (post-V1 roadmap).
+  - `deny.toml` ignores RUSTSEC-2026-0440 (`astral-tokio-tar` unmaintained, 2026-11-03;
+    dev-only through `testcontainers`).
 
 ## 7. Security principles (apply throughout)
 - MQTT never carries commands to execute. Scripts, systemd units and KDE shortcuts are allowlisted
@@ -1340,6 +1363,24 @@ M15.
   Docker/Podman, gamepad, TTS/playmedia, Music Assistant, X11 active window, GUI settings,
   localisation. Macros and app/game launcher only with a strong use case.
 - **Maintenance:** zbus 6 migration; pure-Rust `pulseaudio` crate if it matures.
+
+### Future HID++ controls
+Each would be one more opt-in `controls` entry under `[integrations.peripheral_battery]`, on the
+peripheral's device, like the backlight (M19). `openlogi-hidpp` already implements the features;
+the MX Keys S has all of the keyboard ones (M16 feature table).
+- **Host switching** (0x1814 change host, 0x1815 hosts info): a select of the device's Easy-Switch
+  hosts. Switching away loses the link, so the select can only go one way from this computer.
+- **Key and button diversion** (0x1B04 reprogrammable controls v5): diverted keys (the Fn row,
+  mouse gesture and thumb buttons) fire an `event` entity in HA instead of their normal action.
+  Diversion is volatile: set it again on every reconnect, and undo it on exit.
+- **Keyboard settings:** Fn inversion (0x40A3), disabled keys such as Caps Lock or Insert
+  (0x4521), OS mode for the layout (0x4531).
+- **Mouse settings:** DPI (0x2201), SmartShift (0x2111), hi-res wheel (0x2121) and thumbwheel
+  (0x2150).
+- **Bluetooth-direct HID++:** devices paired over Bluetooth instead of a receiver speak HID++
+  on their own hidraw node (the udev rule already covers them). BlueZ devices could then become
+  sub-devices too, merged with the Bluetooth integration's switches.
+- **Never** pairing or unpairing over MQTT (as with remote unlock: too much for a remote command).
 
 ## 9. Session log
 | Date | Milestone | Outcome / notes |
@@ -1370,6 +1411,7 @@ M15.
 | 2026-11-04 | M16 | Two probe runs on the KDE host (Fedora 44). Bolt on `hid-generic` confirmed; identity, 0x1004 and 0x1982 work through `openlogi-hidpp` with events; sleep is a 0x41 link-down after ~10 min, and wake brings 0x41 + 0x1d4b + an unasked battery report, so no polling (`battery_refresh` off). Solaar's udev rules give access; Solaar shares the node (software-ID matching). Captures saved as fixtures with decoding tests. Probe now skips kernel-owned nodes, logs only HID++ and logs node changes |
 | 2026-11-04 | M18 | `deskhand-hidpp` (platform-neutral: `HidBackend`, `HidppSource`, receiver task, `inspect`, one `hidpp` adapter with leased software ids and a single notice decoder). Linux `LinuxHidraw` (HID++ descriptor check, `AsyncFd` I/O, inotify hotplug). Event-driven: discovery and one read on the first link-up, then only the devices' own reports; a sleeping device is never contacted. `battery_refresh` option, doctor section, `deskhand udev-rule`, setup offer, rule in the Nix package and tarball. 14 crate tests on a scripted Bolt mock with the M16 capture replayed, plus hidraw and option tests. No Logitech hardware here: the host check is M19 |
 | 2026-11-04 | M17 | Sub-devices: `SubDevice` on `EntitySpec`, one retained MQTT document per device under `homeassistant/device/deskhand_<node>/<key>/config` (adopted, kept, stubbed and deleted like the main one; uninstall and print-discovery cover them). `peripherals.rs` in common: sources, sink, merge by key or serial, five entities per peripheral on its own device, receivers as devices, per-source supervision and config. UPower peripherals are now a source (same `battery_<model>` ids) with state, low, connected and updated. Dev HA keeps entity ids and history when an entity moves to a sub-device. New snapshot, 4 planner tests, broker test, 6 merge tests, UPower mock test |
+| 2026-11-05 | M19 (part) | Opt-in keyboard backlight (`controls = ["backlight"]`): switch, level, mode select (added: a level forces manual mode) and three timeouts on the keyboard's device. Generic `Backlight`/`Controller` model in common; 0x1982 in the HID++ adapter (looked up only when enabled, events for key presses, read-modify-write as Solaar does); commands only reach a connected keyboard. Mock backlight with the M16 values, 4 source tests (opt-in, capture replay, writes, asleep), adapter and kit tests. Docs: entities, configuration, two HA automations, "Future HID++ controls" in §8, README, CHANGELOG. `deny.toml`: RUSTSEC-2026-0440 (dev-only). Host check open |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

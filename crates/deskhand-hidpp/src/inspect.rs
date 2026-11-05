@@ -103,7 +103,7 @@ async fn inspect_receiver(
         };
         if online {
             let read = async {
-                let dev = link.device(slot).await?;
+                let dev = link.device(slot, false).await?;
                 Ok::<_, adapter::AdapterError>((
                     dev.identity.name.clone(),
                     dev.read_battery().await?,

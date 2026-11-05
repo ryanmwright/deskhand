@@ -26,6 +26,45 @@ pub enum MockBattery {
     Voltage { mv: u16, flags: u8 },
 }
 
+/// 0x1982 (v3) state, as the device keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MockBacklight {
+    pub enabled: bool,
+    /// Options byte: WOW, crown, power save, mode in bits 3..=4.
+    pub options: u8,
+    /// Capability byte (options bits 8..=15).
+    pub caps: u8,
+    /// The configured (manual) level.
+    pub level: u8,
+    pub levels: u8,
+    /// The current level and status (`getBacklightInfo`).
+    pub current: u8,
+    pub status: u8,
+    /// Hands out, hands in, powered, not powered; 5 s units.
+    pub durations: [u16; 4],
+}
+
+impl MockBacklight {
+    /// The MX Keys S of the M16 setup capture: `01 0d 3d 03 00 02 03 00 06
+    /// 00 04 00`, 8 levels, level 2 in automatic mode.
+    pub fn mx_keys_s() -> Self {
+        Self {
+            enabled: true,
+            options: 0x0d,
+            caps: 0x3d,
+            level: 2,
+            levels: 8,
+            current: 2,
+            status: 2,
+            durations: [3, 6, 4, 0],
+        }
+    }
+
+    pub fn mode(&self) -> u8 {
+        (self.options >> 3) & 0b11
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MockDevice {
     pub wpid: u16,
@@ -35,6 +74,7 @@ pub struct MockDevice {
     pub serial: String,
     pub online: bool,
     pub battery: MockBattery,
+    pub backlight: Option<MockBacklight>,
 }
 
 impl MockDevice {
@@ -52,24 +92,29 @@ impl MockDevice {
                 level: 0x08,
                 status: 0x00,
             },
+            backlight: Some(MockBacklight::mx_keys_s()),
         }
     }
 
-    /// Feature table: index → id. 0x0003 at 2, 0x0005 at 3, 0x1d4b at 4 and
-    /// the battery at 8, like the MX Keys S.
+    /// Feature table: index → id. 0x0003 at 2, 0x0005 at 3, 0x1d4b at 4,
+    /// the battery at 8 and the backlight at 0x0c, like the MX Keys S.
     fn features(&self) -> BTreeMap<u8, u16> {
         let battery = match self.battery {
             MockBattery::Unified { .. } => 0x1004,
             MockBattery::Status { .. } => 0x1000,
             MockBattery::Voltage { .. } => 0x1001,
         };
-        BTreeMap::from([
+        let mut features = BTreeMap::from([
             (0x01, 0x0001),
             (0x02, 0x0003),
             (0x03, 0x0005),
             (0x04, 0x1d4b),
             (0x08, battery),
-        ])
+        ]);
+        if self.backlight.is_some() {
+            features.insert(0x0c, 0x1982);
+        }
+        features
     }
 }
 
@@ -150,6 +195,11 @@ impl MockReceiver {
         self.inject(&report);
     }
 
+    /// The device's backlight, as last written.
+    pub fn backlight(&self, slot: u8) -> Option<MockBacklight> {
+        self.state().devices.get(&slot)?.backlight.clone()
+    }
+
     /// Unpairs the device in `slot` (0x40 notice).
     pub fn unpair(&self, slot: u8) {
         self.state().devices.remove(&slot);
@@ -200,7 +250,7 @@ impl MockReceiver {
         if dev == 0xff {
             return register(&mut s, req);
         }
-        let Some(d) = s.devices.get(&dev) else {
+        let Some(d) = s.devices.get_mut(&dev) else {
             return vec![vec![0x10, dev, 0x8f, req[2], req[3], 0x08, 0x00]];
         };
         if !d.online {
@@ -312,7 +362,7 @@ fn register(s: &mut State, req: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// HID++ 2.0 function data of an online device, or `None` (error).
-fn feature(d: &MockDevice, index: u8, function: u8, params: &[u8]) -> Option<Vec<u8>> {
+fn feature(d: &mut MockDevice, index: u8, function: u8, params: &[u8]) -> Option<Vec<u8>> {
     let features = d.features();
     if index == 0 {
         return match function {
@@ -324,7 +374,8 @@ fn feature(d: &MockDevice, index: u8, function: u8, params: &[u8]) -> Option<Vec
                 } else {
                     features.iter().find(|(_, f)| **f == id).map(|(i, _)| *i)
                 };
-                Some(vec![found.unwrap_or(0), 0x00, 0x00])
+                let version = if id == 0x1982 { 3 } else { 0 };
+                Some(vec![found.unwrap_or(0), 0x00, version])
             }
             // ping: protocol 4.5
             1 => Some(vec![0x04, 0x05, params[2]]),
@@ -350,6 +401,47 @@ fn feature(d: &MockDevice, index: u8, function: u8, params: &[u8]) -> Option<Vec
         (0x1004, 0) => Some(vec![0x0f, 0x03]),
         (0x1004, 1) | (0x1000, 0) | (0x1001, 0) => Some(battery_payload(&d.battery)),
         (0x1000, 1) => Some(vec![0x04, 0x04]),
+        (0x1982, f) => backlight(d.backlight.as_mut()?, f, params),
+        _ => None,
+    }
+}
+
+/// 0x1982: getBacklightConfig, setBacklightConfig, getBacklightInfo.
+fn backlight(b: &mut MockBacklight, function: u8, params: &[u8]) -> Option<Vec<u8>> {
+    let le = |v: u16| v.to_le_bytes();
+    match function {
+        0 => {
+            let mut r = vec![u8::from(b.enabled), b.options, b.caps, 0x03, 0x00, b.level];
+            for d in b.durations {
+                r.extend(le(d));
+            }
+            Some(r)
+        }
+        1 => {
+            let word = |i: usize| u16::from_le_bytes([params[i], params[i + 1]]);
+            b.enabled = params[0] != 0;
+            b.options = params[1];
+            b.level = params[3];
+            b.durations = [word(4), word(6), word(8), word(10)];
+            // What the keyboard shows now.
+            b.status = match (b.enabled, b.mode()) {
+                (false, _) => 0,
+                (true, 1) => 2,
+                (true, 3) => {
+                    b.current = b.level;
+                    5
+                }
+                _ => b.status,
+            };
+            Some(Vec::new())
+        }
+        2 => {
+            let mut r = vec![b.levels, b.current, b.status, 0x00];
+            for d in [3, 6, 60, 0] {
+                r.extend(le(d));
+            }
+            Some(r)
+        }
         _ => None,
     }
 }

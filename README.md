@@ -28,6 +28,9 @@ A device in Home Assistant with, depending on your desktop and hardware:
   as events ("Doorbell — [Unlock] [Ignore]").
 - **Power:** battery, power profile, and, if you allow them, suspend, restart
   and shut down buttons.
+- **Peripherals:** keyboard, mouse and headset batteries, each its own device,
+  including Logitech keyboards and mice on a Bolt or Unifying receiver; and,
+  if you allow it, the keyboard backlight.
 - **KDE Plasma:** active window, virtual desktop, Do not disturb, night light,
   dark mode, per-monitor brightness, screens on/off, and global keyboard
   shortcuts that trigger Home Assistant automations.

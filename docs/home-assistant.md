@@ -253,6 +253,43 @@ actions:
       brightness_pct: 20
 ```
 
+### Keyboard battery low
+
+Each peripheral is its own device ([entities.md](entities.md#peripheral-batteries)),
+so its entity ids start with the device name, for example "MX Keys S":
+
+```yaml
+alias: Charge the keyboard
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.mx_keys_s_battery_low
+    to: "on"
+actions:
+  - action: notify.mobile_app_phone
+    data:
+      title: Keyboard battery low
+      message: >-
+        The MX Keys S is at {{ states('sensor.mx_keys_s_battery') }} %.
+```
+
+`battery_low` uses the keyboard's own warning when it has one, else 15 % or
+less. A sleeping keyboard keeps its last value, so this doesn't fire just
+because it went to sleep.
+
+With the [backlight control](entities.md#keyboard-backlight) on, the backlight
+can follow the room, for example off for the night:
+
+```yaml
+alias: Keyboard backlight off at night
+triggers:
+  - trigger: time
+    at: "23:00:00"
+actions:
+  - action: switch.turn_off
+    target:
+      entity_id: switch.mx_keys_s_backlight
+```
+
 ## A media player card
 
 Deskhand publishes the media controls as separate entities, which work with

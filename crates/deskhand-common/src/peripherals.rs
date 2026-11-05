@@ -17,6 +17,19 @@
 //! | `battery_<key>_updated` | timestamp (diagnostic) | last successful battery reading |
 //! | `<receiver>_paired` | sensor (diagnostic), on the receiver's device | attribute `slots` |
 //!
+//! With `controls = ["backlight"]`, a keyboard whose source reports a
+//! backlight also gets:
+//!
+//! | entity | kind | |
+//! |---|---|---|
+//! | `battery_<key>_backlight` | switch | |
+//! | `battery_<key>_backlight_level` | number | `0` to levels − 1; switches to manual mode |
+//! | `battery_<key>_backlight_mode` | select (config) | `automatic`, `manual`; only with a light sensor |
+//! | `battery_<key>_backlight_timeout_{hands_out,hands_in,powered}` | number, s (config) | fade-out timeouts |
+//!
+//! Commands go to the source that reported the backlight, and only while the
+//! peripheral is connected (a sleeping keyboard can't be reached).
+//!
 //! `<key>` is the slug of the model name (else the serial), the same rule
 //! for every source, so a device seen by two sources is one device. If the
 //! names differ, a matching serial joins them. Sources earlier in the list
@@ -34,14 +47,17 @@
 //! [integrations.peripheral_battery]
 //! battery_refresh = "off"  # or "30m": re-read connected devices of sources
 //!                          # that otherwise only listen for changes (HID++)
+//! controls = []            # opt-in: ["backlight"]
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use deskhand_core::ctx::{BinarySensor, Sensor};
-use deskhand_core::entity::{BinarySensorClass, SensorClass, StateClass, SubDevice};
+use deskhand_core::ctx::{BinarySensor, Commands, Number, Select, Sensor, Switch};
+use deskhand_core::entity::{
+    BinarySensorClass, EntityCategory, EntityKind, NumberMode, SensorClass, StateClass, SubDevice,
+};
 use deskhand_core::hub::Lifecycle;
 use deskhand_core::{
     Attributes, Ctx, Enabled, EntityId, EntitySpec, Integration, IntegrationError, Probe,
@@ -49,6 +65,7 @@ use deskhand_core::{
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::time::rfc3339;
@@ -136,6 +153,113 @@ pub struct Link {
     pub encrypted: Option<bool>,
 }
 
+/// A setting a source can change on a peripheral. Each is opt-in through
+/// `controls = [...]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Control {
+    /// Keyboard backlight: on/off, level, mode and fade-out timeouts.
+    Backlight,
+}
+
+/// A keyboard backlight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backlight {
+    /// Switched on. It can still be dark: level 0, or a bright room in
+    /// automatic mode.
+    pub enabled: bool,
+    /// The current level, `0..levels`.
+    pub level: u8,
+    pub levels: u8,
+    /// The level follows the light sensor. `None`: no light sensor.
+    pub automatic: Option<bool>,
+    /// `None`: the device has no fade-out timeouts.
+    pub timeouts: Option<BacklightTimeouts>,
+}
+
+/// How long the backlight stays on after the last key press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BacklightTimeouts {
+    /// Hands away from the keyboard.
+    pub hands_out: Duration,
+    /// Hands still near it (proximity sensor).
+    pub hands_in: Duration,
+    /// While charging.
+    pub powered: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BacklightTimeout {
+    HandsOut,
+    HandsIn,
+    Powered,
+}
+
+impl BacklightTimeout {
+    pub const ALL: [Self; 3] = [Self::HandsOut, Self::HandsIn, Self::Powered];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::HandsOut => "hands_out",
+            Self::HandsIn => "hands_in",
+            Self::Powered => "powered",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::HandsOut => "Backlight timeout",
+            Self::HandsIn => "Backlight timeout (hands near)",
+            Self::Powered => "Backlight timeout (charging)",
+        }
+    }
+
+    pub fn get(self, t: &BacklightTimeouts) -> Duration {
+        match self {
+            Self::HandsOut => t.hands_out,
+            Self::HandsIn => t.hands_in,
+            Self::Powered => t.powered,
+        }
+    }
+}
+
+/// A change Home Assistant asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BacklightCommand {
+    Enabled(bool),
+    /// Sets the level and switches to manual mode, where a level holds.
+    Level(u8),
+    Automatic(bool),
+    Timeout(BacklightTimeout, Duration),
+}
+
+/// Takes commands for a peripheral's controls back to the source that
+/// reported it. Must not block.
+#[derive(Clone)]
+pub struct Controller(Arc<dyn Fn(BacklightCommand) + Send + Sync>);
+
+impl Controller {
+    pub fn new(send: impl Fn(BacklightCommand) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(send))
+    }
+
+    fn send(&self, cmd: BacklightCommand) {
+        (self.0)(cmd);
+    }
+}
+
+impl PartialEq for Controller {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for Controller {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Controller")
+    }
+}
+
 /// What one source knows about one peripheral.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeripheralReading {
@@ -160,6 +284,10 @@ pub struct PeripheralReading {
     pub connected: bool,
     /// When the battery was last read successfully.
     pub read_at: Option<SystemTime>,
+    /// Only reported when the backlight control is enabled.
+    pub backlight: Option<Backlight>,
+    /// Where commands for `backlight` go.
+    pub controller: Option<Controller>,
 }
 
 impl PeripheralReading {
@@ -181,6 +309,8 @@ impl PeripheralReading {
             low: None,
             connected: true,
             read_at: None,
+            backlight: None,
+            controller: None,
         }
     }
 
@@ -245,6 +375,7 @@ pub struct PeripheralSink {
     source: &'static str,
     tx: mpsc::UnboundedSender<Msg>,
     battery_refresh: Option<Duration>,
+    controls: Arc<BTreeSet<Control>>,
 }
 
 impl std::fmt::Debug for PeripheralSink {
@@ -290,6 +421,12 @@ impl PeripheralSink {
     pub fn battery_refresh(&self) -> Option<Duration> {
         self.battery_refresh
     }
+
+    /// Whether the user enabled `control`. Sources leave a control's
+    /// feature alone otherwise.
+    pub fn wants(&self, control: Control) -> bool {
+        self.controls.contains(&control)
+    }
 }
 
 /// One way of finding peripheral batteries.
@@ -317,6 +454,8 @@ pub struct PeripheralOptions {
     /// `"off"` (default) or a duration such as `"30m"`.
     #[serde(deserialize_with = "off_or_duration")]
     pub battery_refresh: Option<Duration>,
+    /// Opt-in controls (`["backlight"]`).
+    pub controls: BTreeSet<Control>,
 }
 
 /// `"off"` → `None`; otherwise a humantime duration (at least a minute).
@@ -404,6 +543,7 @@ impl Integration for PeripheralBattery {
             }
         }
         let cancel = ctx.cancelled();
+        let controls = Arc::new(options.controls.clone());
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut pending: BTreeSet<&'static str> = BTreeSet::new();
         let mut order = Vec::new();
@@ -423,6 +563,7 @@ impl Integration for PeripheralBattery {
                 source: source.id(),
                 tx: tx.clone(),
                 battery_refresh: options.battery_refresh,
+                controls: controls.clone(),
             };
             tokio::spawn(supervise(
                 source.clone(),
@@ -434,7 +575,8 @@ impl Integration for PeripheralBattery {
         }
         drop(tx);
 
-        let mut kit = Kit::new(order);
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let mut kit = Kit::new(order, options.controls, cmd_tx);
         let ready_at = tokio::time::Instant::now() + READY_TIMEOUT;
         let mut ready = false;
         if pending.is_empty() {
@@ -449,6 +591,7 @@ impl Integration for PeripheralBattery {
                     ctx.ready();
                     ready = true;
                 }
+                Some((key, cmd)) = cmd_rx.recv() => kit.command(&key, cmd),
                 msg = rx.recv() => {
                     let Some(msg) = msg else { return Ok(()) };
                     if let Msg::Settled(source) = &msg {
@@ -537,6 +680,7 @@ struct PeripheralEntities {
     low: BinarySensor,
     connected: BinarySensor,
     updated: Sensor,
+    backlight: Option<BacklightEntities>,
 }
 
 impl PeripheralEntities {
@@ -573,6 +717,7 @@ impl PeripheralEntities {
             )
             .sensor_class(SensorClass::Timestamp)
             .diagnostic())),
+            backlight: None,
             device,
         }
     }
@@ -613,6 +758,173 @@ pub fn battery_id(key: &EntityId) -> EntityId {
     EntityId::from_static("battery").join(key.as_str())
 }
 
+/// What decides a backlight's entities; a change registers them again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BacklightShape {
+    levels: u8,
+    automatic: bool,
+    timeouts: bool,
+}
+
+impl BacklightShape {
+    fn of(b: &Backlight) -> Self {
+        Self {
+            levels: b.levels,
+            automatic: b.automatic.is_some(),
+            timeouts: b.timeouts.is_some(),
+        }
+    }
+}
+
+/// Timeouts in seconds; HID++ counts in 5 s steps up to 2 hours.
+const TIMEOUT_STEP: f64 = 5.0;
+const TIMEOUT_MAX: f64 = 7200.0;
+const MODES: [&str; 2] = ["automatic", "manual"];
+
+/// The entities of a backlight, and the tasks that forward their commands.
+struct BacklightEntities {
+    shape: BacklightShape,
+    switch: Switch,
+    level: Number,
+    mode: Option<Select>,
+    timeouts: Vec<(BacklightTimeout, Number)>,
+    forwarders: Vec<AbortHandle>,
+}
+
+impl Drop for BacklightEntities {
+    fn drop(&mut self) {
+        // The forwarders hold the command streams, and so the registrations.
+        for f in &self.forwarders {
+            f.abort();
+        }
+    }
+}
+
+fn number_mode(mut spec: EntitySpec, mode: NumberMode) -> EntitySpec {
+    if let EntityKind::Number { mode: m, .. } = &mut spec.kind {
+        *m = mode;
+    }
+    spec
+}
+
+/// Forwards one entity's commands, mapped, to the kit.
+fn forward<T: Send + 'static>(
+    mut commands: Commands<T>,
+    key: &EntityId,
+    tx: &mpsc::UnboundedSender<(EntityId, BacklightCommand)>,
+    map: impl Fn(T) -> Option<BacklightCommand> + Send + 'static,
+) -> AbortHandle {
+    let (key, tx) = (key.clone(), tx.clone());
+    tokio::spawn(async move {
+        while let Some(c) = commands.recv().await {
+            if let Some(cmd) = map(c)
+                && tx.send((key.clone(), cmd)).is_err()
+            {
+                break;
+            }
+        }
+    })
+    .abort_handle()
+}
+
+impl BacklightEntities {
+    fn register(
+        ctx: &Ctx,
+        key: &EntityId,
+        device: &Arc<SubDevice>,
+        shape: BacklightShape,
+        tx: &mpsc::UnboundedSender<(EntityId, BacklightCommand)>,
+    ) -> Self {
+        let id = battery_id(key).join("backlight");
+        let on = |spec: EntitySpec| spec.on_device(device.clone());
+        let mut forwarders = Vec::new();
+
+        let (switch, cmds) = ctx.switch(on(
+            EntitySpec::switch(id.clone(), "Backlight").icon("mdi:keyboard-outline")
+        ));
+        forwarders.push(forward(cmds, key, tx, |on| {
+            Some(BacklightCommand::Enabled(on))
+        }));
+
+        let top = shape.levels.saturating_sub(1);
+        let level_spec = EntitySpec::number(
+            id.join("level"),
+            "Backlight level",
+            0.0,
+            f64::from(top),
+            1.0,
+        )
+        .icon("mdi:brightness-6");
+        let (level, cmds) = ctx.number(on(number_mode(level_spec, NumberMode::Slider)));
+        forwarders.push(forward(cmds, key, tx, move |v: f64| {
+            v.is_finite()
+                .then(|| BacklightCommand::Level(v.round().clamp(0.0, f64::from(top)) as u8))
+        }));
+
+        let mode = shape.automatic.then(|| {
+            let (select, cmds) = ctx.select(on(EntitySpec::select(
+                id.join("mode"),
+                "Backlight mode",
+                MODES.iter().map(|m| (*m).to_owned()).collect(),
+            )
+            .icon("mdi:brightness-auto")
+            .category(EntityCategory::Config)));
+            forwarders.push(forward(cmds, key, tx, |m: String| match m.as_str() {
+                "automatic" => Some(BacklightCommand::Automatic(true)),
+                "manual" => Some(BacklightCommand::Automatic(false)),
+                _ => None,
+            }));
+            select
+        });
+
+        let mut timeouts = Vec::new();
+        if shape.timeouts {
+            for which in BacklightTimeout::ALL {
+                let spec = EntitySpec::number(
+                    id.join("timeout").join(which.as_str()),
+                    which.label(),
+                    TIMEOUT_STEP,
+                    TIMEOUT_MAX,
+                    TIMEOUT_STEP,
+                )
+                .unit("s")
+                .icon("mdi:timer-outline")
+                .category(EntityCategory::Config);
+                let (number, cmds) = ctx.number(on(number_mode(spec, NumberMode::Box)));
+                forwarders.push(forward(cmds, key, tx, move |secs: f64| {
+                    (secs.is_finite() && secs > 0.0).then(|| {
+                        let secs = secs.clamp(TIMEOUT_STEP, TIMEOUT_MAX);
+                        BacklightCommand::Timeout(which, Duration::from_secs_f64(secs))
+                    })
+                }));
+                timeouts.push((which, number));
+            }
+        }
+
+        Self {
+            shape,
+            switch,
+            level,
+            mode,
+            timeouts,
+            forwarders,
+        }
+    }
+
+    fn publish(&self, b: &Backlight) {
+        self.switch.set(b.enabled);
+        self.level.set(f64::from(b.level));
+        if let (Some(select), Some(auto)) = (&self.mode, b.automatic) {
+            select.set(MODES[usize::from(!auto)]);
+        }
+        if let Some(t) = &b.timeouts {
+            for (which, number) in &self.timeouts {
+                number.set(which.get(t).as_secs_f64());
+            }
+        }
+    }
+}
+
 struct ReceiverEntities {
     device: Arc<SubDevice>,
     paired: Sensor,
@@ -629,11 +941,20 @@ struct Kit {
     receivers: BTreeMap<EntityId, BTreeMap<&'static str, ReceiverReading>>,
     entities: BTreeMap<EntityId, PeripheralEntities>,
     receiver_entities: BTreeMap<EntityId, ReceiverEntities>,
+    controls: BTreeSet<Control>,
+    /// Commands from control entities: (merged key, command).
+    commands: mpsc::UnboundedSender<(EntityId, BacklightCommand)>,
 }
 
 impl Kit {
-    fn new(order: Vec<&'static str>) -> Self {
+    fn new(
+        order: Vec<&'static str>,
+        controls: BTreeSet<Control>,
+        commands: mpsc::UnboundedSender<(EntityId, BacklightCommand)>,
+    ) -> Self {
         Self {
+            controls,
+            commands,
             order,
             readings: BTreeMap::new(),
             aliases: BTreeMap::new(),
@@ -762,8 +1083,35 @@ impl Kit {
             if m.link.receiver.is_none() {
                 m.link = other.link.clone();
             }
+            if m.backlight.is_none() {
+                m.backlight = other.backlight;
+            }
         }
         Some((source, m))
+    }
+
+    /// Sends a command to the source that reported the backlight, if the
+    /// peripheral is reachable there.
+    fn command(&self, key: &EntityId, cmd: BacklightCommand) {
+        let target = self.readings.get(key).and_then(|by_source| {
+            by_source
+                .iter()
+                .filter(|(_, r)| r.controller.is_some())
+                .min_by_key(|(s, _)| self.rank(s))
+                .map(|(_, r)| r)
+        });
+        match target {
+            Some(r) if r.connected => {
+                tracing::debug!(%key, ?cmd, "backlight command");
+                if let Some(c) = &r.controller {
+                    c.send(cmd);
+                }
+            }
+            Some(_) => {
+                tracing::info!(%key, ?cmd, "peripheral asleep or disconnected; backlight command ignored");
+            }
+            None => tracing::debug!(%key, ?cmd, "no source controls this peripheral"),
+        }
     }
 
     fn sub_device(&self, key: &EntityId, r: &PeripheralReading) -> SubDevice {
@@ -793,18 +1141,32 @@ impl Kit {
         };
         let device = self.sub_device(key, &r);
         let stale = self.entities.get(key).is_none_or(|e| *e.device != device);
+        // New handles first, then drop the old ones: the hub sees a
+        // re-registration, not a removal.
+        let mut old = None;
         if stale {
-            // New handles first, then drop the old ones: the hub sees a
-            // re-registration, not a removal.
             if !self.entities.contains_key(key) {
                 tracing::info!(%key, name = %r.name, source, "peripheral appeared");
             }
             let entities = PeripheralEntities::register(ctx, key, Arc::new(device));
-            self.entities.insert(key.clone(), entities);
+            old = self.entities.insert(key.clone(), entities);
         }
-        if let Some(e) = self.entities.get(key) {
+        let backlight = r
+            .backlight
+            .filter(|_| self.controls.contains(&Control::Backlight));
+        if let Some(e) = self.entities.get_mut(key) {
+            let shape = backlight.as_ref().map(BacklightShape::of);
+            if shape != e.backlight.as_ref().map(|b| b.shape) {
+                e.backlight = shape.map(|shape| {
+                    BacklightEntities::register(ctx, key, &e.device, shape, &self.commands)
+                });
+            }
             e.publish(&r, source);
+            if let (Some(entities), Some(b)) = (&e.backlight, &backlight) {
+                entities.publish(b);
+            }
         }
+        drop(old);
     }
 
     fn refresh_receiver(&mut self, ctx: &Ctx, key: &EntityId) {
@@ -872,6 +1234,7 @@ fn fill(slot: &mut Option<String>, other: &Option<String>) {
 mod tests {
     use std::sync::Mutex;
 
+    use deskhand_core::entity::CommandValue;
     use deskhand_core::testing::{rig_with, wait_attr, wait_entity, wait_spec, wait_state};
     use deskhand_core::{Config, State};
 
@@ -1142,6 +1505,74 @@ mod tests {
         );
         other_tx.send(FakeMsg::Update(keyboard(50.0))).unwrap();
         wait_attr(&mut t, &id("battery_mx_keys_s"), "source", json!("other")).await;
+    }
+
+    #[tokio::test]
+    async fn backlight_is_opt_in_and_commands_reach_the_source() {
+        let backlight = Backlight {
+            enabled: true,
+            level: 2,
+            levels: 8,
+            automatic: None,
+            timeouts: None,
+        };
+        let (sent_tx, mut sent) = mpsc::unbounded_channel();
+        let controller = Controller::new(move |cmd| {
+            let _ = sent_tx.send(cmd);
+        });
+        let reading = |connected: bool, levels: u8| PeripheralReading {
+            backlight: Some(Backlight {
+                levels,
+                ..backlight
+            }),
+            controller: Some(controller.clone()),
+            connected,
+            ..keyboard(80.0)
+        };
+        let level = id("battery_mx_keys_s_backlight_level");
+
+        let (hidpp, tx) = source("hidpp");
+        let mut t = start("", vec![hidpp]);
+        tx.send(FakeMsg::Update(reading(true, 8))).unwrap();
+        wait_state(&mut t, &id("battery_mx_keys_s"), State::Float(80.0)).await;
+        t.settle(Duration::from_millis(200)).await;
+        assert!(!t.entities.contains(&level));
+
+        let (hidpp, tx) = source("hidpp");
+        let mut t = start(
+            "[integrations.peripheral_battery]\ncontrols = [\"backlight\"]\n",
+            vec![hidpp],
+        );
+        tx.send(FakeMsg::Update(reading(true, 8))).unwrap();
+        wait_state(&mut t, &level, State::Float(2.0)).await;
+        // No light sensor, no timeouts: no mode select, no timeout numbers.
+        assert!(!t.entities.contains(&id("battery_mx_keys_s_backlight_mode")));
+        t.command(level.as_str(), CommandValue::Number(9.6));
+        assert_eq!(sent.recv().await, Some(BacklightCommand::Level(7)));
+
+        // Asleep: nothing reaches the source.
+        tx.send(FakeMsg::Update(reading(false, 8))).unwrap();
+        wait_state(
+            &mut t,
+            &id("battery_mx_keys_s_connected"),
+            State::Bool(false),
+        )
+        .await;
+        t.command("battery_mx_keys_s_backlight", CommandValue::Bool(false));
+        t.settle(Duration::from_millis(200)).await;
+        assert!(sent.try_recv().is_err());
+
+        // Another level count re-registers the number with the new range.
+        tx.send(FakeMsg::Update(reading(true, 4))).unwrap();
+        wait_spec(
+            &mut t,
+            &level,
+            "0 to 3",
+            |s| matches!(s.kind, EntityKind::Number { max, .. } if max == 3.0),
+        )
+        .await;
+        t.command("battery_mx_keys_s_backlight", CommandValue::Bool(false));
+        assert_eq!(sent.recv().await, Some(BacklightCommand::Enabled(false)));
     }
 
     #[test]

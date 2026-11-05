@@ -8,13 +8,14 @@ use std::time::Duration;
 
 use deskhand_common::PeripheralBattery;
 use deskhand_common::peripherals::{CAPABILITY, PeripheralSource};
+use deskhand_core::entity::CommandValue;
 use deskhand_core::testing::{TestRig, rig_with, wait_attr, wait_entity, wait_spec, wait_state};
 use deskhand_core::{Config, EntityId, State};
 use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::backend::{Access, HidBackend, HidBus, HidNode, Hotplug, RawHidChannel};
-use crate::mock::{self, MockBattery, MockDevice, MockReceiver};
+use crate::mock::{self, MockBacklight, MockBattery, MockDevice, MockReceiver};
 use crate::receiver::Timing;
 use crate::source::HidppSource;
 
@@ -418,6 +419,7 @@ async fn devices_with_only_0x1000_or_0x1001() {
             level: 50,
             status: 0,
         },
+        backlight: None,
     };
     let trackball = MockDevice {
         wpid: 0x4093,
@@ -427,6 +429,7 @@ async fn devices_with_only_0x1000_or_0x1001() {
         serial: "AABBCCDD0022".into(),
         online: true,
         battery: MockBattery::Voltage { mv: 3811, flags: 0 },
+        backlight: None,
     };
     let (backend, rx) = one_receiver([(2, mouse), (3, trackball)]);
     let mut t = start(&backend, "");
@@ -538,4 +541,131 @@ async fn inspect_lists_receivers_and_devices() {
     assert_eq!(r.devices[0].battery.as_deref(), Some("100 % discharging"));
     assert_eq!(r.devices[1].name.as_deref(), Some("MX Master 3S"));
     assert_eq!(r.devices[1].battery, None);
+}
+
+const BACKLIGHT: &str = "battery_mx_keys_s_backlight";
+const LEVEL: &str = "battery_mx_keys_s_backlight_level";
+const MODE: &str = "battery_mx_keys_s_backlight_mode";
+const HANDS_OUT: &str = "battery_mx_keys_s_backlight_timeout_hands_out";
+const CONTROLS: &str = "[integrations.peripheral_battery]\ncontrols = [\"backlight\"]\n";
+
+/// Whether a 0x1982 lookup (root getFeature) was sent to `slot`.
+fn looked_up_backlight(rx: &MockReceiver, slot: u8) -> bool {
+    rx.requests_to(slot)
+        .iter()
+        .any(|r| r[2] == 0x00 && r[3] >> 4 == 0 && r[4..6] == [0x19, 0x82])
+}
+
+#[tokio::test]
+async fn backlight_is_left_alone_unless_enabled() {
+    let (backend, rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
+    let mut t = start(&backend, "");
+    wait_state(&mut t, &id(BATTERY), State::Float(100.0)).await;
+    // A backlight key press: decoded nowhere, harmless.
+    rx.inject(&[0x11, 0x01, 0x0c, 0x00, 0x08, 0x01, 0x04]);
+    t.settle(Duration::from_millis(300)).await;
+    assert!(!t.entities.contains(&id(BACKLIGHT)));
+    assert!(
+        !looked_up_backlight(&rx, 1),
+        "0x1982 looked up without the control"
+    );
+}
+
+#[tokio::test]
+async fn backlight_entities_follow_the_keys() {
+    let (backend, rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
+    let mut t = start(&backend, CONTROLS);
+    // The M16 setup values: on, level 2 of 8, automatic, 15 s / 30 s / 20 s.
+    wait_state(&mut t, &id(BACKLIGHT), State::Bool(true)).await;
+    wait_state(&mut t, &id(LEVEL), State::Float(2.0)).await;
+    wait_state(&mut t, &id(MODE), "automatic".into()).await;
+    wait_state(&mut t, &id(HANDS_OUT), State::Float(15.0)).await;
+    wait_state(
+        &mut t,
+        &id("battery_mx_keys_s_backlight_timeout_hands_in"),
+        State::Float(30.0),
+    )
+    .await;
+    wait_state(
+        &mut t,
+        &id("battery_mx_keys_s_backlight_timeout_powered"),
+        State::Float(20.0),
+    )
+    .await;
+    wait_spec(&mut t, &id(LEVEL), "0 to 7, on the keyboard", |s| {
+        matches!(s.kind, deskhand_core::entity::EntityKind::Number { min, max, .. } if min == 0.0 && max == 7.0)
+            && s.device.as_ref().is_some_and(|d| d.key.as_str() == "mx_keys_s")
+    })
+    .await;
+    wait_spec(&mut t, &id(MODE), "config category", |s| {
+        s.category == Some(deskhand_core::entity::EntityCategory::Config)
+    })
+    .await;
+    let before = rx.requests_to(1).len();
+
+    // The M16 capture's key presses (temporary manual): down, off, up, up, up.
+    let events = mock::capture(include_str!(
+        "../../deskhand-linux/tests/fixtures/hidpp/mx-keys-s-bolt-events.txt"
+    ));
+    for r in events.iter().filter(|r| r.get(2) == Some(&0x0c)) {
+        rx.inject(r);
+    }
+    wait_state(&mut t, &id(LEVEL), State::Float(3.0)).await;
+    t.settle(Duration::from_millis(300)).await;
+    // The keys don't change the configured mode, and nothing was asked.
+    assert_eq!(t.state(&id(MODE)), Some(&"automatic".into()));
+    assert_eq!(t.state(&id(BACKLIGHT)), Some(&State::Bool(true)));
+    assert_eq!(rx.requests_to(1).len(), before);
+}
+
+#[tokio::test]
+async fn backlight_commands_are_written_and_read_back() {
+    let (backend, rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
+    let mut t = start(&backend, CONTROLS);
+    wait_state(&mut t, &id(LEVEL), State::Float(2.0)).await;
+
+    // A level holds only in manual mode: setting one switches to it.
+    t.command(LEVEL, CommandValue::Number(5.0));
+    wait_state(&mut t, &id(LEVEL), State::Float(5.0)).await;
+    wait_state(&mut t, &id(MODE), "manual".into()).await;
+    let b = rx.backlight(1).unwrap();
+    assert_eq!((b.mode(), b.level), (3, 5));
+    // WOW and power save went back as read.
+    assert_eq!(b.options & 0b111, 0b101);
+
+    // Back to the light sensor; the level is not sent outside manual mode.
+    t.command(MODE, CommandValue::Text("automatic".into()));
+    wait_state(&mut t, &id(MODE), "automatic".into()).await;
+    let b = rx.backlight(1).unwrap();
+    assert_eq!((b.mode(), b.level), (1, 0));
+
+    t.command(BACKLIGHT, CommandValue::Bool(false));
+    wait_state(&mut t, &id(BACKLIGHT), State::Bool(false)).await;
+    assert!(!rx.backlight(1).unwrap().enabled);
+
+    // Seconds, rounded up to the device's 5 s steps; the others unchanged.
+    t.command(HANDS_OUT, CommandValue::Number(61.0));
+    wait_state(&mut t, &id(HANDS_OUT), State::Float(65.0)).await;
+    assert_eq!(rx.backlight(1).unwrap().durations, [13, 6, 4, 0]);
+}
+
+#[tokio::test]
+async fn backlight_commands_wait_for_an_awake_keyboard() {
+    let (backend, rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
+    let mut t = start(&backend, CONTROLS);
+    wait_state(&mut t, &id(LEVEL), State::Float(2.0)).await;
+    rx.set_online(1, false);
+    wait_state(
+        &mut t,
+        &id("battery_mx_keys_s_connected"),
+        State::Bool(false),
+    )
+    .await;
+    let before = rx.requests_to(1).len();
+    t.command(LEVEL, CommandValue::Number(6.0));
+    t.command(BACKLIGHT, CommandValue::Bool(false));
+    t.settle(Duration::from_millis(500)).await;
+    assert_eq!(rx.requests_to(1).len(), before, "asked a sleeping keyboard");
+    assert_eq!(t.state(&id(LEVEL)), Some(&State::Float(2.0)));
+    assert_eq!(rx.backlight(1), Some(MockBacklight::mx_keys_s()));
 }

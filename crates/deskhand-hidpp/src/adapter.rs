@@ -6,20 +6,28 @@
 //! HID++ clients on the same node (Solaar, the kernel driver with id 1) keep
 //! their replies. Unsolicited reports are decoded in one listener per channel
 //! into [`Notice`]s: link changes (0x41), unpairing (0x40) and HID++ 2.0
-//! feature events, which [`DeviceLink::decode`] turns into battery readings.
+//! feature events, which [`DeviceLink::decode`] turns into battery and
+//! backlight changes.
 
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use deskhand_common::peripherals::{BatteryLevel, ChargeState};
+use deskhand_common::peripherals::{
+    Backlight, BacklightCommand, BacklightTimeout, BacklightTimeouts, BatteryLevel, ChargeState,
+};
 use hidpp::channel::{
     ChannelError, HidppChannel, HidppMessage, MessageListenerGuard, RawHidChannel, RequestSwId,
     SwIdPolicy,
 };
 use hidpp::device::{Device, DeviceError};
 use hidpp::feature::CreatableFeature;
+use hidpp::feature::backlight::{
+    BacklightConfig, BacklightEvent, BacklightFeature, BacklightMode, BacklightOptions,
+    BacklightStatus, SetBacklightConfig,
+};
 use hidpp::feature::battery_status::{BatteryStatusFeature, LegacyBatteryStatus};
 use hidpp::feature::battery_voltage::{
     BatteryVoltageFeature, VoltageBatteryInfo, VoltageChargingStatus,
@@ -490,9 +498,10 @@ impl ReceiverLink {
     }
 
     /// Opens the device in `slot`: protocol check, feature lookup, identity
-    /// and nothing else. Only call this while the receiver says it's online.
-    pub async fn device(&self, slot: u8) -> Result<DeviceLink> {
-        DeviceLink::open(&self.chan, slot).await
+    /// and nothing else; 0x1982 only with `backlight`. Only call this while
+    /// the receiver says it's online.
+    pub async fn device(&self, slot: u8, backlight: bool) -> Result<DeviceLink> {
+        DeviceLink::open(&self.chan, slot, backlight).await
     }
 }
 
@@ -534,8 +543,131 @@ pub struct Identity {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeviceEvent {
     Battery(Battery),
+    /// 0x1982: the backlight changed on the device (keys, light sensor,
+    /// battery).
+    Backlight(BacklightChange),
     /// 0x1D4B: the device reconnected (woke, or was switched on).
     Reconnected,
+}
+
+/// A 0x1982 info event. It carries no timeouts, and the mode only in part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BacklightChange {
+    pub levels: u8,
+    pub level: u8,
+    pub enabled: Option<bool>,
+    /// `None` for a level set with the keys (temporary manual), which
+    /// leaves the configured mode as it was.
+    pub automatic: Option<bool>,
+}
+
+impl BacklightChange {
+    fn from_status(levels: u8, level: u8, status: BacklightStatus) -> Self {
+        let (enabled, automatic) = match status {
+            BacklightStatus::DisabledBySoftware => (Some(false), None),
+            BacklightStatus::AlsAutomatic | BacklightStatus::AlsSaturated => {
+                (Some(true), Some(true))
+            }
+            BacklightStatus::PermanentManual => (Some(true), Some(false)),
+            BacklightStatus::TemporaryManual => (Some(true), None),
+            // Critical battery, or a status this crate doesn't know.
+            _ => (None, None),
+        };
+        Self {
+            levels,
+            level,
+            enabled,
+            automatic,
+        }
+    }
+
+    pub fn apply(&self, b: &mut Backlight) {
+        b.levels = self.levels;
+        b.level = self.level;
+        if let Some(enabled) = self.enabled {
+            b.enabled = enabled;
+        }
+        if let (Some(auto), Some(a)) = (self.automatic, b.automatic.as_mut()) {
+            *a = auto;
+        }
+    }
+}
+
+/// 0x1982 counts its timeouts in 5 s steps, from 1 to 0x05A0 (2 hours).
+const TIMEOUT_UNIT: u64 = 5;
+const TIMEOUT_UNITS_MAX: u64 = 0x05a0;
+
+fn timeout_units(d: Duration) -> u16 {
+    d.as_secs()
+        .div_ceil(TIMEOUT_UNIT)
+        .clamp(1, TIMEOUT_UNITS_MAX) as u16
+}
+
+fn timeout(units: u16) -> Duration {
+    Duration::from_secs(u64::from(units) * TIMEOUT_UNIT)
+}
+
+/// The configuration and info replies in Deskhand's terms.
+fn backlight(config: &BacklightConfig, levels: u8, level: u8, timeouts: bool) -> Backlight {
+    Backlight {
+        enabled: config.enabled,
+        level,
+        levels,
+        automatic: config
+            .options
+            .contains(BacklightOptions::AUTO_MODE_SUPPORTED)
+            .then_some(config.mode == BacklightMode::Automatic),
+        timeouts: timeouts.then(|| BacklightTimeouts {
+            hands_out: timeout(config.duration_hands_out),
+            hands_in: timeout(config.duration_hands_in),
+            powered: timeout(config.duration_powered),
+        }),
+    }
+}
+
+/// The write for `cmd`, built from the configuration as read, so the
+/// option bits and the fourth timeout go back unchanged. Like Solaar, the
+/// level is only sent in permanent manual mode, the one where it holds.
+fn backlight_write(config: &BacklightConfig, cmd: BacklightCommand) -> SetBacklightConfig {
+    let mut set = SetBacklightConfig {
+        enabled: config.enabled,
+        options: config.options,
+        mode: config.mode,
+        effect: None,
+        current_level: config.current_level,
+        duration_hands_out: config.duration_hands_out,
+        duration_hands_in: config.duration_hands_in,
+        duration_powered: config.duration_powered,
+        duration_not_powered: config.duration_not_powered,
+    };
+    match cmd {
+        BacklightCommand::Enabled(on) => set.enabled = on,
+        BacklightCommand::Level(level) => {
+            set.enabled = true;
+            set.mode = BacklightMode::PermanentManual;
+            set.current_level = level;
+        }
+        BacklightCommand::Automatic(auto) => {
+            set.enabled = true;
+            set.mode = if auto {
+                BacklightMode::Automatic
+            } else {
+                BacklightMode::PermanentManual
+            };
+        }
+        BacklightCommand::Timeout(which, d) => {
+            let units = timeout_units(d);
+            match which {
+                BacklightTimeout::HandsOut => set.duration_hands_out = units,
+                BacklightTimeout::HandsIn => set.duration_hands_in = units,
+                BacklightTimeout::Powered => set.duration_powered = units,
+            }
+        }
+    }
+    if set.mode != BacklightMode::PermanentManual {
+        set.current_level = 0;
+    }
+    set
 }
 
 /// A device behind a receiver, with the features Deskhand uses.
@@ -544,6 +676,8 @@ pub struct DeviceLink {
     pub battery: Option<BatteryKind>,
     battery_index: u8,
     wireless_index: Option<u8>,
+    /// 0x1982: its index, the feature, and whether it has timeouts (v3).
+    backlight: Option<(u8, Arc<BacklightFeature>, bool)>,
     unified: Option<Arc<UnifiedBatteryFeature>>,
     status: Option<Arc<BatteryStatusFeature>>,
     voltage: Option<Arc<BatteryVoltageFeature>>,
@@ -554,12 +688,14 @@ impl fmt::Debug for DeviceLink {
         f.debug_struct("DeviceLink")
             .field("identity", &self.identity)
             .field("battery", &self.battery)
+            .field("backlight", &self.backlight.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl DeviceLink {
-    async fn open(chan: &Arc<HidppChannel>, slot: u8) -> Result<Self> {
+    /// `backlight`: also look up 0x1982 (only when the control is enabled).
+    async fn open(chan: &Arc<HidppChannel>, slot: u8, backlight: bool) -> Result<Self> {
         let mut dev = Device::new(chan.clone(), slot).await?;
         if !matches!(dev.protocol_version, ProtocolVersion::V20 { .. }) {
             return Err(AdapterError::NotFound);
@@ -583,6 +719,11 @@ impl DeviceLink {
             (status, voltage)
         };
         let wireless_index = find(WirelessDeviceStatusFeature::ID).await?.map(|(i, _)| i);
+        let backlight = if backlight {
+            find(BacklightFeature::ID).await?
+        } else {
+            None
+        };
 
         let mut identity = Identity::default();
         if let Some((index, _)) = name {
@@ -636,6 +777,13 @@ impl DeviceLink {
             battery: None,
             battery_index: 0,
             wireless_index,
+            backlight: backlight.map(|(index, version)| {
+                (
+                    index,
+                    dev.add_feature::<BacklightFeature>(index),
+                    version >= 3,
+                )
+            }),
             unified: None,
             status: None,
             voltage: None,
@@ -688,6 +836,33 @@ impl DeviceLink {
         })
     }
 
+    /// Reads the backlight. `Ok(None)`: no 0x1982 (or not looked up).
+    pub async fn read_backlight(&self) -> Result<Option<Backlight>> {
+        let Some((_, f, timeouts)) = &self.backlight else {
+            return Ok(None);
+        };
+        let config = f.get_backlight_config().await?;
+        let info = f.get_backlight_info().await?;
+        Ok(Some(backlight(
+            &config,
+            info.nb_levels,
+            info.current_level,
+            *timeouts,
+        )))
+    }
+
+    /// Changes the backlight (read, modify, write; the device keeps it
+    /// across power cycles) and reads it back.
+    pub async fn set_backlight(&self, cmd: BacklightCommand) -> Result<Option<Backlight>> {
+        let Some((_, f, _)) = &self.backlight else {
+            return Ok(None);
+        };
+        let config = f.get_backlight_config().await?;
+        f.set_backlight_config(backlight_write(&config, cmd))
+            .await?;
+        self.read_backlight().await
+    }
+
     /// Decodes an event from this device, if it's one Deskhand uses.
     pub fn decode(
         &self,
@@ -702,6 +877,17 @@ impl DeviceLink {
                 {
                     Some(DeviceEvent::Reconnected)
                 }
+                _ => None,
+            };
+        }
+        if let Some((index, ..)) = &self.backlight
+            && feature_index == *index
+        {
+            return match BacklightEvent::decode(function, payload)? {
+                BacklightEvent::InfoChanged(i) => Some(DeviceEvent::Backlight(
+                    BacklightChange::from_status(i.nb_levels, i.current_level, i.status),
+                )),
+                #[allow(unreachable_patterns)]
                 _ => None,
             };
         }
@@ -939,6 +1125,42 @@ mod tests {
         let b = decode_battery(BatteryKind::Voltage, 0, &p).unwrap();
         assert_eq!(b.low, Some(true));
         assert!(b.percentage.unwrap() < 5.0);
+    }
+
+    #[test]
+    fn backlight_events_and_timeouts() {
+        let mut b = Backlight {
+            enabled: true,
+            level: 2,
+            levels: 8,
+            automatic: Some(true),
+            timeouts: None,
+        };
+        let change = |bytes: [u8; 4]| {
+            let mut p = [0u8; 16];
+            p[..4].copy_from_slice(&bytes);
+            let Some(BacklightEvent::InfoChanged(i)) = BacklightEvent::decode(0, &p) else {
+                panic!("not decoded: {bytes:x?}");
+            };
+            BacklightChange::from_status(i.nb_levels, i.current_level, i.status)
+        };
+        // A key press from the capture (temporary manual): the mode stays.
+        change([0x08, 0x01, 0x04, 0x00]).apply(&mut b);
+        assert_eq!((b.level, b.automatic, b.enabled), (1, Some(true), true));
+        // Permanent manual, then disabled by software.
+        change([0x08, 0x05, 0x05, 0x00]).apply(&mut b);
+        assert_eq!((b.level, b.automatic), (5, Some(false)));
+        change([0x08, 0x00, 0x00, 0x00]).apply(&mut b);
+        assert!(!b.enabled);
+        // No light sensor: the mode stays unknown.
+        b.automatic = None;
+        change([0x08, 0x02, 0x02, 0x00]).apply(&mut b);
+        assert_eq!((b.automatic, b.enabled), (None, true));
+
+        assert_eq!(timeout_units(Duration::ZERO), 1);
+        assert_eq!(timeout_units(Duration::from_secs(16)), 4);
+        assert_eq!(timeout_units(Duration::from_secs(9000)), 0x05a0);
+        assert_eq!(timeout(3), Duration::from_secs(15));
     }
 
     #[test]
