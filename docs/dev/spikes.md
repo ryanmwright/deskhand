@@ -18,7 +18,7 @@ session there.
 | 6 | libpulse mic filters | **works** (corked streams not exercised) |
 | 7 | Camera `/proc` scan + inotify | **works** |
 | 8 | logind session from a user service | **works**, but use `User.Display` first |
-| 9 | Logitech HID++ (M16) | **pending** the run on the KDE host |
+| 9 | Logitech HID++ (M16) | **works**: identity, battery and backlight with events; sleep/wake as link notifications plus an unasked battery report |
 
 ## 1. Idle (`idle_probe`)
 
@@ -146,8 +146,12 @@ streams:
 
 ## 9. Logitech HID++ (`hidpp_probe`, M16)
 
-**Status: waiting for the run on the KDE host** (MX Keys S on a Logi Bolt receiver). This dev
-host and the Plasma VM have no Logitech hardware.
+**Status: done.** Two runs on the KDE host (2026-11-04: Fedora 44, kernel 7.2.13; MX Keys S on a
+Logi Bolt receiver, and a G305 on a Lightspeed receiver). The second run used the first probe
+binary, so the receiver replug left only indirect evidence (see below). This dev host and the
+Plasma VM have no Logitech hardware. The Bolt traffic is saved in
+`crates/deskhand-linux/tests/fixtures/hidpp/`, and `tests/hidpp_fixtures.rs` decodes it with
+`openlogi-hidpp`.
 
 The probe (`crates/deskhand-linux/examples/hidpp_probe.rs`) talks HID++ through
 `openlogi-hidpp` over Deskhand's own hidraw channel (`deskhand_linux::hidraw`). It prints and
@@ -176,7 +180,9 @@ sudo target/release/examples/hidpp_probe 120 hidpp-capture.txt
 
 During the 120 s, with the time of each step noted:
 1. Leave the keyboard untouched until it sleeps (backlight off), then press a key.
-2. Plug in the USB-C cable for 20 s, then unplug it.
+2. Optional: plug in the USB-C cable for 20 s, then unplug it. If that's awkward, skip it; the
+   charging events can be captured later, the next time the keyboard is charged anyway (run the
+   probe with a longer time, such as `600`, while plugging it in).
 3. Change the backlight with its keys (up, down, off).
 4. Unplug the receiver for 10 s, then plug it back in.
 
@@ -188,19 +194,43 @@ sudo install -m644 data/udev/70-deskhand-logitech.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-### Questions the run answers
+### Second run (sleep and receiver)
+
+One run, with the cable unplugged (the keyboard stays lit and awake on cable power):
+
+```sh
+target/release/examples/hidpp_probe 1500 hidpp-capture-2.txt
+```
+1. Don't touch the keyboard for at least 15 minutes. Use the mouse if you need the machine.
+2. Press a key, then wait about 10 s.
+3. Unplug the Bolt receiver, wait about 10 s, plug it back in, wait 10 s, then press Ctrl-C.
+
+This shows whether the keyboard drops its link when it sleeps (0x41 offline, then online on the
+key press), and what the probe sees for the replug (`CHANNEL … disconnected`,
+`NODE removed/added`). If the receiver is still connected at the end, the probe also pings the
+keyboard once and logs how long it took to answer.
+
+### Results (first run)
 
 | Question | Answer |
 |---|---|
-| Driver bound to the Bolt receiver (why UPower shows nothing) | |
-| Pairings: slot, WPID, unit ID, codename of the MX Keys S | |
-| A request to a sleeping device: error, timeout, or answered? (time) | |
-| Link down/up notifications (0x41) on sleep and wake? | |
-| 0x1004: percentage, levels, charging states; an event per % change? | |
-| 0x0003: model IDs, firmware entities, serial number | |
-| 0x1982: backlight config; events for key changes? | |
-| Receiver unplug and replug: what the channel sees | |
-| `battery_refresh` needed? | |
+| Driver bound to the Bolt receiver (why UPower shows nothing) | **`hid-generic`** for all four Bolt interfaces (`046d:c548`), so the kernel's Logitech drivers never see it. The HID++ interface was `hidraw10`; `hid-multitouch` holds another one. The G305's Lightspeed receiver (`c53f`) is bound to `logitech-djreceiver`, and the mouse to `logitech-hidpp-device`, so UPower already has the G305. |
+| Permissions | Read-write without `sudo`, because Solaar's udev rules are installed. They do what `data/udev/70-deskhand-logitech.rules` does, so `doctor` should accept either. |
+| Pairings | One pairing. Slot 1 is a keyboard named `MX KEYS S`, WPID `B378`, unit ID (redacted). Empty slots answer HID++ 1.0 error `0x08`. The connection event says encrypted; `openlogi-hidpp`'s pairing-info decode says not encrypted, so use the event. Receiver unique ID: 16 hex characters (redacted). Notification flags were already wireless + software-present. |
+| Identity | Protocol 4.5. 0x0003 v4: model ID `B378`, serial (12 characters, redacted), firmware entities BL1 88.03.B0018 (bootloader), **RBK 81.03.B0018** (application, active), hardware revision 1. Name "MX Keys S" (0x0005) and friendly name "MX KEYS S" (0x0007). 33 features, including 0x1004 v3, 0x1982 v3, 0x1d4b, 0x1814/0x1815, 0x1b04 v5, 0x40a3, 0x4521, 0x4531 and 0x4220 (lock keys). |
+| Request latency | The first request (protocol ping) took 1.0–1.4 s, even though the keyboard had just been used to type the command. After that, 14–30 ms per request. A full read (features, identity, battery, backlight) takes about 2 s. |
+| 0x1004 | Reports percentage and levels (critical, low, good, full) and is rechargeable. Reading: 100 %, full, discharging. **Events arrive without polling:** USB-C in sent `Charging` (100 %, full, external power 1), and USB-C out sent `Discharging`, each within a second and each together with a backlight event. |
+| 0x1982 | 8 levels; level 2 in automatic (ALS) mode. Durations: hands out 3, hands in 6, powered 4 (the info call reports out-of-box values 3/6/60). The units still need checking in M19. **Every backlight key press sent an event** (`TemporaryManual`, levels 0–3). |
+| Sleep (link down/up, 0x41) | **Link down after about 10 minutes untouched** (cable unplugged): `10 01 41 10 41 78 b3`, bit 6 set. The G305 on its Lightspeed receiver went offline about a minute later. On the next key press (11.5 minutes later, the lock-screen password): link up (0x41), then a 0x1d4b reconnection broadcast (`SoftwareReconfigurationNeeded`, reason `PowerSwitchActivated`), **a 0x1004 battery report sent unasked**, and a 0x4220 lock-key state, all within 45 ms. Nothing was polled. |
+| Request to a sleeping device | Not tested on purpose: Deskhand never asks while the link is down. The first request after start-up took 0.5–1.4 s, even with an awake keyboard. |
+| Receiver unplug and replug | Indirect only (first probe binary): after the replug, writing to the old node failed ("restore notification flags: ERROR"). That is the error the hidraw channel maps to "disconnected". The `NODE`/`CHANNEL` logging was not in that binary. The M19 host check covers the replug with the real integration. |
+| Other HID++ clients | During start-up, another program (most likely Solaar, software id 7) read the keyboard on the same node. Its replies reach every reader, so request matching by software ID is required. Solaar also turns the receiver's notification flags on. This time they were wireless-only at start (Solaar not running yet). |
+| `battery_refresh` needed? | **No (default `off`).** Charge-state changes are events, and every wake (several times a day) sends a fresh battery report. Still unknown: whether a percentage drop while awake sends an event; the `updated` timestamp makes that visible in HA. |
+
+Other findings:
+- The kernel's HID++ driver uses software ID 1 (`11 01 00 11 …` on the G305). The probe's 0x0b, and later Deskhand's `Leased` policy, keep clear of it.
+- DJ device nodes (`logitech-hidpp-device`) carry the device's HID++ at its slot index (0x01), not 0xff. They also carry raw input (mouse movement). The probe now skips these nodes and only logs HID++ reports (IDs 0x10–0x12). Deskhand must never log non-HID++ reports.
+- `openlogi-hidpp` treats the Lightspeed receiver `c53f` as Unifying. Pairing info (`0xb5 0x5n`) fails with error `0x03` there, but device arrival works (mouse, WPID `4074`, online).
 
 ## Incidental
 

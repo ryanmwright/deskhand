@@ -43,6 +43,10 @@ tokio-util.workspace = true
 name = "mic_probe"
 required-features = ["audio-pulse"]
 
+[[test]]
+name = "hidpp_fixtures"
+required-features = ["hidpp"]
+
 [[example]]
 name = "hidpp_probe"
 required-features = ["hidpp"]

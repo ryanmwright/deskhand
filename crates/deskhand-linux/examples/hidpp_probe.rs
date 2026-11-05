@@ -101,7 +101,11 @@ impl RawHidChannel for Tap {
         buf: &mut [u8],
     ) -> Result<usize, Box<dyn std::error::Error + Sync + Send>> {
         let n = self.inner.read_report(buf).await?;
-        self.log.report(&self.node, "rx", &buf[..n]);
+        // Only HID++ reports: a node can also carry input (mouse movement,
+        // key presses on DJ device nodes), which is noise and private.
+        if matches!(buf.first(), Some(0x10..=0x12)) {
+            self.log.report(&self.node, "rx", &buf[..n]);
+        }
         Ok(n)
     }
 
@@ -370,6 +374,44 @@ async fn probe_device(log: &Arc<Log>, chan: &Arc<HidppChannel>, node: &str, inde
     std::mem::forget(dev);
 }
 
+/// Logs channels that disconnect and hidraw nodes that appear or disappear
+/// (receiver unplugged and replugged). The probe does not reopen nodes.
+fn watch_nodes(
+    log: &Arc<Log>,
+    keep: &[(Arc<HidppChannel>, Option<Receiver>)],
+    nodes: Vec<HidrawNode>,
+) {
+    let log = log.clone();
+    let chans: Vec<Arc<HidppChannel>> = keep.iter().map(|(c, _)| c.clone()).collect();
+    tokio::spawn(async move {
+        let mut known: Vec<_> = nodes.into_iter().map(|n| n.path).collect();
+        let mut connected = vec![true; chans.len()];
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            for (i, c) in chans.iter().enumerate() {
+                if connected[i] && !c.is_connected() {
+                    connected[i] = false;
+                    log.line(&format!(
+                        "CHANNEL {:04x}:{:04x} disconnected",
+                        c.vendor_id, c.product_id
+                    ));
+                }
+            }
+            let Ok(now) = hidraw::enumerate() else {
+                continue;
+            };
+            let now: Vec<_> = now.into_iter().map(|n| n.path).collect();
+            for p in now.iter().filter(|p| !known.contains(p)) {
+                log.line(&format!("NODE added {}", p.display()));
+            }
+            for p in known.iter().filter(|p| !now.contains(p)) {
+                log.line(&format!("NODE removed {}", p.display()));
+            }
+            known = now;
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -393,8 +435,18 @@ async fn main() -> anyhow::Result<()> {
     // Channels and receivers stay alive (and so keep listening) until exit.
     let mut keep: Vec<(Arc<HidppChannel>, Option<Receiver>)> = Vec::new();
     let mut restore: Vec<(Arc<HidppChannel>, NotificationFlags)> = Vec::new();
+    // (channel, device index) of every paired device, for the closing ping.
+    let mut paired: Vec<(Arc<HidppChannel>, String, u8)> = Vec::new();
     for n in nodes.iter().filter(|n| n.is_logitech()) {
         let label = n.path.display().to_string();
+        if n.driver.as_deref() == Some("logitech-hidpp-device") {
+            // A device node the kernel's HID++ driver owns (its battery is in
+            // UPower already); its device index is the slot, not 0xff.
+            log.line(&format!(
+                "{label}: kernel HID++ driver owns this device; skipped"
+            ));
+            continue;
+        }
         let inner = match n.open() {
             Ok(c) => c,
             Err(e) => {
@@ -425,6 +477,7 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(flags) = flags {
                     restore.push((chan.clone(), flags));
                 }
+                paired.extend(slots.iter().map(|s| (chan.clone(), label.clone(), *s)));
                 slots
             }
             None => {
@@ -444,12 +497,26 @@ async fn main() -> anyhow::Result<()> {
         "watching for {seconds} s: let the keyboard sleep and wake it, plug and unplug USB-C, \
          change the backlight, unplug and replug the receiver (Ctrl-C ends early)"
     ));
+    watch_nodes(&log, &keep, nodes);
     tokio::select! {
         () = tokio::time::sleep(Duration::from_secs(seconds)) => {}
         _ = tokio::signal::ctrl_c() => log.line("interrupted"),
     }
 
-    for (chan, flags) in restore {
+    // How long a paired device takes to answer now (a sleeping one is slow,
+    // or does not answer at all).
+    for (chan, label, index) in &paired {
+        if chan.is_connected() {
+            step(
+                &log,
+                &format!("{label} closing ping of device {index:#04x}"),
+                hidpp::protocol::determine_version(chan, *index),
+            )
+            .await;
+        }
+    }
+
+    for (chan, flags) in restore.into_iter().filter(|(c, _)| c.is_connected()) {
         step(
             &log,
             "restore notification flags",

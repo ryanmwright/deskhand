@@ -1101,7 +1101,7 @@ M15.
         and backlight (0x1982).
       - Then logs every report for 120 s. Meanwhile the user lets the keyboard sleep, wakes it,
         plugs in USB-C, changes the backlight, and unplugs and replugs the receiver.
-- [ ] The user runs it from a CI artifact (`docs/dev/deploy-to-host.md`). This needs read and
+- [x] The user runs it from a CI artifact (`docs/dev/deploy-to-host.md`). This needs read and
       write access to the hidraw node, so a temporary udev rule or `sudo`. Results go in
       `docs/dev/spikes.md`, and the raw captures are saved as test fixtures.
 - **Settles:**
@@ -1109,8 +1109,24 @@ M15.
   - What a sleeping device looks like (link-down notification vs. error vs. timeout).
   - Whether 0x1004 sends an event for every percentage change, which decides `battery_refresh`.
   - Whether `openlogi-hidpp` handles the MX Keys S correctly.
-- **Status:** the probe is ready and waiting for the run on the KDE host. Instructions and the
-  table of open questions are in `docs/dev/spikes.md` §9.
+- **Status:** done (2026-11-04). Two runs on the KDE host; results in `docs/dev/spikes.md` §9,
+  Bolt traffic in `crates/deskhand-linux/tests/fixtures/hidpp/` (decoded by
+  `tests/hidpp_fixtures.rs`).
+  - The Bolt receiver is bound to `hid-generic`. `openlogi-hidpp` handles it and the MX Keys S
+    correctly: pairings, codename, serial, firmware, 0x1004 and 0x1982, with events.
+  - **No polling needed:** charging changes and backlight key presses are events. After about
+    10 minutes untouched the keyboard drops its link (0x41 offline). On the next key press it
+    reconnects (0x41 online, then 0x1d4b) and sends a 0x1004 report by itself.
+    `battery_refresh` defaults to `off`.
+  - Decisions for M18:
+    - on link-up, use the unasked 0x1004 report and only read if none arrives within a few
+      seconds;
+    - match replies by software ID (Solaar was talking on the same node);
+    - leave the receiver's notification flags set on exit (Solaar relies on them too);
+    - skip `logitech-hidpp-device` nodes (the kernel owns them and UPower reports them);
+    - log only HID++ reports.
+  - The receiver replug was only seen indirectly (writes to the old node fail). The M19 host
+    check covers it.
   - The toolchain comes from the `nixpkgs-rust` flake input (nixos-unstable, Rust 1.99) for the
     devShell and crane. Drop that input once nixos-26.11 is out. `0BSD` was already allowed.
   - `deskhand_linux::hidraw` (feature `hidpp`) was pulled forward from M18:
@@ -1186,10 +1202,17 @@ M15.
       - Probe reason for `EACCES` points to the udev rule.
 - [ ] Wiring: feature `hidpp` (in `default` and `linux`); `doctor` shows receivers, driver,
       permissions, slots and batteries.
-- [ ] `packaging/udev/70-deskhand-logitech.rules` (`TAG+="uaccess"` for Logitech receivers and
-      HID++ Bluetooth devices).
+- [ ] `data/udev/70-deskhand-logitech.rules` (`TAG+="uaccess"` for Logitech receivers and
+      HID++ Bluetooth devices; added in M16).
       - Installed to `$out/lib/udev/rules.d`; docs for NixOS `services.udev.packages` and for
         installing it by hand from the tarball.
+      - The rule is a one-time root step per machine, not per install. Solaar's rules (packaged
+        by Fedora, Arch and Debian/Ubuntu) do the same, so `doctor` accepts either and prints the
+        install command only when a Logitech node can't be opened.
+      - `deskhand setup` offers to install it (with `sudo`, after showing the command) when it
+        finds a Logitech receiver it can't open.
+      - `uaccess` only covers the user of the active local session. Headless mode (M15) would
+        need a group-based variant (`GROUP=…, MODE="0660"`); document it there.
       - Security note: same access as Solaar.
 - [ ] Tests with a `MockReceiver: RawHidChannel` and replays of the M16 captures:
       - Startup with a sleeping device.
@@ -1219,7 +1242,9 @@ M15.
     firmware, battery, state, low, connected and updated.
   - Sleeping turns `connected` off and keeps the value; a key press refreshes `updated`.
   - USB-C gives `charging`.
-  - Replugging the receiver leaves no duplicates.
+  - Replugging the receiver leaves no duplicates. This can be simulated without touching the
+    hardware: set the receiver's USB `authorized` attribute to 0 for 5 s, then back to 1. Its
+    hidraw nodes disappear and come back, as with a real replug.
   - With UPower stopped, the keyboard still updates.
   - The backlight works both ways.
 
@@ -1269,6 +1294,7 @@ M15.
 | 2026-11-02 | 0.1.1 | With the user: no power buttons by default (`power.buttons = []`; suspend, hibernate, restart, shut down and logout are opt-in, like remote unlock); `deskhand setup` asks which (`--power-buttons` for `--yes`). The v0.1.0 draft is not published; 0.1.1 is the first release |
 | 2026-11-04 | Planning | M16–M19 planned with the user: Logitech HID++ peripheral batteries (MX Keys S on Bolt is invisible to the kernel and UPower). Generic `peripheral_battery` integration merging UPower and HID++ sources, per-peripheral HA devices (accepted one-time move of `battery_<model>`), `openlogi-hidpp` (0BSD) for the protocol (needs Rust 1.99), backlight the only opt-in control |
 | 2026-11-04 | M16 (part) | Toolchain moved to Rust 1.99 (`nixpkgs-rust` input for the devShell and crane); `openlogi-hidpp =0.9.0` pinned. `deskhand_linux::hidraw` (sysfs enumeration, `RawHidChannel` with poll and plain read/write, no unsafe) and `hidpp_probe` (receiver, pairings, features, identity, battery, backlight, 120 s event watch, hex capture). Tested over a socketpair against `HidppChannel`. CI uploads the probe with a udev rule. Waiting for the run on the KDE host (`docs/dev/spikes.md` §9) |
+| 2026-11-04 | M16 | Two probe runs on the KDE host (Fedora 44). Bolt on `hid-generic` confirmed; identity, 0x1004 and 0x1982 work through `openlogi-hidpp` with events; sleep is a 0x41 link-down after ~10 min, and wake brings 0x41 + 0x1d4b + an unasked battery report, so no polling (`battery_refresh` off). Solaar's udev rules give access; Solaar shares the node (software-ID matching). Captures saved as fixtures with decoding tests. Probe now skips kernel-owned nodes, logs only HID++ and logs node changes |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

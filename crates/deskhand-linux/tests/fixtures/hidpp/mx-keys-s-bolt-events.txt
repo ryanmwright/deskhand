@@ -1,0 +1,35 @@
+# M16 captures (docs/dev/spikes.md §9), 2026-11-04: unsolicited reports from the MX Keys S
+# (slot 1) on a Logi Bolt receiver (hidraw10), after the probe's start-up. Nothing was polled.
+# Feature indices on this keyboard: 0x04 = 0x1d4b, 0x08 = 0x1004, 0x0c = 0x1982, 0x0e = 0x4220.
+# Serial, unit ID and receiver ID are replaced with placeholders
+# (1234AB567CD8, 11223344, AAAABBBBCCCC0001).
+# Format: <ms since start> rx <node> <report bytes in hex>
+
+# Run 1: USB-C cable in (charging) and out, then backlight keys (down, off, up, up, up).
+   48707 rx /dev/hidraw10 11 01 08 00 64 08 01 01 00 00 00 00 00 00 00 00 00 00 00 00
+   48714 rx /dev/hidraw10 11 01 0c 00 08 02 02 00 00 00 00 00 00 00 00 00 00 00 00 00
+   87633 rx /dev/hidraw10 11 01 08 00 64 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+   87640 rx /dev/hidraw10 11 01 0c 00 08 02 02 00 00 00 00 00 00 00 00 00 00 00 00 00
+   93708 rx /dev/hidraw10 11 01 0c 00 08 01 04 00 00 00 00 00 00 00 00 00 00 00 00 00
+   94264 rx /dev/hidraw10 11 01 0c 00 08 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00
+   95629 rx /dev/hidraw10 11 01 0c 00 08 01 04 00 00 00 00 00 00 00 00 00 00 00 00 00
+   96244 rx /dev/hidraw10 11 01 0c 00 08 02 04 00 00 00 00 00 00 00 00 00 00 00 00 00
+   97630 rx /dev/hidraw10 11 01 0c 00 08 03 04 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+# Run 2 (excerpt): another host program (mostly software id 7, most likely Solaar reacting to
+# the device arrival the probe triggered) reading the keyboard on the same node; the probe
+# sees its replies too and must ignore them.
+    3924 rx /dev/hidraw10 11 ff 83 b5 61 01 09 4d 58 20 4b 45 59 53 20 53 00 00 00 00
+    4659 rx /dev/hidraw10 11 01 00 10 04 05 aa 00 00 00 00 00 00 00 00 00 00 00 00 00
+    4682 rx /dev/hidraw10 11 01 00 07 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    4853 rx /dev/hidraw10 11 01 02 07 04 11 22 33 44 00 02 b3 78 00 00 00 00 00 01 00
+    5124 rx /dev/hidraw10 11 01 08 17 64 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+# Run 2: untouched; about 10 minutes later the keyboard drops its link (0x41, bit 6 set).
+  604220 rx /dev/hidraw10 10 01 41 10 41 78 b3
+# Run 2: a key press about 11.5 minutes later: link up, then 0x1d4b reconnection, a
+# 0x1004 battery report and a 0x4220 lock-key state, all without a request.
+ 1296765 rx /dev/hidraw10 10 01 41 10 01 78 b3
+ 1296785 rx /dev/hidraw10 11 01 04 00 01 01 01 00 00 00 00 00 00 00 00 00 00 00 00 00
+ 1296800 rx /dev/hidraw10 11 01 08 00 64 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ 1296807 rx /dev/hidraw10 11 01 0e 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00

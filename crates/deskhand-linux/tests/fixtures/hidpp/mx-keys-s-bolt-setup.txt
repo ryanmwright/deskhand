@@ -1,0 +1,126 @@
+# M16 capture (docs/dev/spikes.md §9), second run, 2026-11-04, Fedora 44, kernel 7.2.13.
+# MX Keys S (WPID b378, slot 1) on a Logi Bolt receiver (046d:c548, hid-generic).
+# Probe start-up: receiver id, notification flags, pairings, device arrival, codename,
+# feature table, identity, battery (0x1004) and backlight (0x1982). Software id 0x0b.
+# Serial, unit ID and receiver ID are replaced with placeholders
+# (1234AB567CD8, 11223344, AAAABBBBCCCC0001).
+# Format: <ms since start> <tx|rx> <node> <report bytes in hex>
+      56 tx /dev/hidraw10 10 ff 83 fb 00 00 00
+      57 rx /dev/hidraw10 11 ff 83 fb 41 41 41 41 42 42 42 42 43 43 43 43 30 30 30 31
+      58 tx /dev/hidraw10 10 ff 81 00 00 00 00
+      59 rx /dev/hidraw10 10 ff 81 00 00 01 00
+      60 tx /dev/hidraw10 10 ff 80 00 00 09 00
+      60 rx /dev/hidraw10 10 ff 80 00 00 00 00
+      61 tx /dev/hidraw10 10 ff 81 02 00 00 00
+      66 rx /dev/hidraw10 10 ff 81 02 00 01 00
+      67 tx /dev/hidraw10 10 ff 80 02 02 00 00
+      72 rx /dev/hidraw10 10 01 41 10 01 78 b3
+      73 rx /dev/hidraw10 10 ff 80 02 00 00 00
+      74 tx /dev/hidraw10 10 ff 83 b5 51 00 00
+      81 rx /dev/hidraw10 11 ff 83 b5 51 01 78 b3 11 22 33 44 01 00 80 14 01 00 00 00
+      82 tx /dev/hidraw10 10 ff 83 b5 61 01 00
+      86 rx /dev/hidraw10 11 ff 83 b5 61 01 09 4d 58 20 4b 45 59 53 20 53 00 00 00 00
+      87 tx /dev/hidraw10 10 ff 83 b5 52 00 00
+      88 rx /dev/hidraw10 10 ff 8f 83 b5 08 00
+     103 tx /dev/hidraw10 10 01 00 1b 00 00 00
+     647 rx /dev/hidraw10 11 01 00 1b 04 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     647 tx /dev/hidraw10 10 01 00 0b 00 01 00
+     669 rx /dev/hidraw10 11 01 00 0b 01 00 02 00 00 00 00 00 00 00 00 00 00 00 00 00
+     669 tx /dev/hidraw10 10 01 01 0b 00 00 00
+     692 rx /dev/hidraw10 11 01 01 0b 21 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     692 tx /dev/hidraw10 10 01 01 1b 01 00 00
+     713 rx /dev/hidraw10 11 01 01 1b 00 01 00 02 00 00 00 00 00 00 00 00 00 00 00 00
+     714 tx /dev/hidraw10 10 01 01 1b 02 00 00
+     728 rx /dev/hidraw10 11 01 01 1b 00 03 00 04 00 00 00 00 00 00 00 00 00 00 00 00
+     729 tx /dev/hidraw10 10 01 01 1b 03 00 00
+     744 rx /dev/hidraw10 11 01 01 1b 00 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     744 tx /dev/hidraw10 10 01 01 1b 04 00 00
+     759 rx /dev/hidraw10 11 01 01 1b 1d 4b 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     759 tx /dev/hidraw10 10 01 01 1b 05 00 00
+     782 rx /dev/hidraw10 11 01 01 1b 00 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     782 tx /dev/hidraw10 10 01 01 1b 06 00 00
+     796 rx /dev/hidraw10 11 01 01 1b 00 07 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     797 tx /dev/hidraw10 10 01 01 1b 07 00 00
+     819 rx /dev/hidraw10 11 01 01 1b 00 11 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     819 tx /dev/hidraw10 10 01 01 1b 08 00 00
+     841 rx /dev/hidraw10 11 01 01 1b 10 04 00 03 00 00 00 00 00 00 00 00 00 00 00 00
+     842 tx /dev/hidraw10 10 01 01 1b 09 00 00
+     863 rx /dev/hidraw10 11 01 01 1b 1b 04 00 05 00 00 00 00 00 00 00 00 00 00 00 00
+     864 tx /dev/hidraw10 10 01 01 1b 0a 00 00
+     878 rx /dev/hidraw10 11 01 01 1b 18 14 00 02 00 00 00 00 00 00 00 00 00 00 00 00
+     879 tx /dev/hidraw10 10 01 01 1b 0b 00 00
+     893 rx /dev/hidraw10 11 01 01 1b 18 15 00 02 00 00 00 00 00 00 00 00 00 00 00 00
+     894 tx /dev/hidraw10 10 01 01 1b 0c 00 00
+     917 rx /dev/hidraw10 11 01 01 1b 19 82 00 03 00 00 00 00 00 00 00 00 00 00 00 00
+     917 tx /dev/hidraw10 10 01 01 1b 0d 00 00
+     931 rx /dev/hidraw10 11 01 01 1b 40 a3 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     932 tx /dev/hidraw10 10 01 01 1b 0e 00 00
+     946 rx /dev/hidraw10 11 01 01 1b 42 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     947 tx /dev/hidraw10 10 01 01 1b 0f 00 00
+     961 rx /dev/hidraw10 11 01 01 1b 45 21 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     962 tx /dev/hidraw10 10 01 01 1b 10 00 00
+     999 rx /dev/hidraw10 11 01 01 1b 45 31 00 01 00 00 00 00 00 00 00 00 00 00 00 00
+     999 tx /dev/hidraw10 10 01 01 1b 11 00 00
+    1013 rx /dev/hidraw10 11 01 01 1b 45 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1014 tx /dev/hidraw10 10 01 01 1b 12 00 00
+    1028 rx /dev/hidraw10 11 01 01 1b 00 c3 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1029 tx /dev/hidraw10 10 01 01 1b 13 00 00
+    1043 rx /dev/hidraw10 11 01 01 1b 18 02 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1044 tx /dev/hidraw10 10 01 01 1b 14 00 00
+    1074 rx /dev/hidraw10 11 01 01 1b 18 03 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1074 tx /dev/hidraw10 10 01 01 1b 15 00 00
+    1103 rx /dev/hidraw10 11 01 01 1b 18 07 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1104 tx /dev/hidraw10 10 01 01 1b 16 00 00
+    1126 rx /dev/hidraw10 11 01 01 1b 18 16 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1127 tx /dev/hidraw10 10 01 01 1b 17 00 00
+    1149 rx /dev/hidraw10 11 01 01 1b 18 05 60 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1149 tx /dev/hidraw10 10 01 01 1b 18 00 00
+    1171 rx /dev/hidraw10 11 01 01 1b 18 30 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1172 tx /dev/hidraw10 10 01 01 1b 19 00 00
+    1193 rx /dev/hidraw10 11 01 01 1b 18 91 68 09 00 00 00 00 00 00 00 00 00 00 00 00
+    1194 tx /dev/hidraw10 10 01 01 1b 1a 00 00
+    1216 rx /dev/hidraw10 11 01 01 1b 18 a1 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1217 tx /dev/hidraw10 10 01 01 1b 1b 00 00
+    1231 rx /dev/hidraw10 11 01 01 1b 1e 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1232 tx /dev/hidraw10 10 01 01 1b 1c 00 00
+    1246 rx /dev/hidraw10 11 01 01 1b 1e 02 60 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1247 tx /dev/hidraw10 10 01 01 1b 1d 00 00
+    1269 rx /dev/hidraw10 11 01 01 1b 16 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1269 tx /dev/hidraw10 10 01 01 1b 1e 00 00
+    1283 rx /dev/hidraw10 11 01 01 1b 1e b0 70 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1284 tx /dev/hidraw10 10 01 01 1b 1f 00 00
+    1298 rx /dev/hidraw10 11 01 01 1b 18 61 70 01 00 00 00 00 00 00 00 00 00 00 00 00
+    1299 tx /dev/hidraw10 10 01 01 1b 20 00 00
+    1313 rx /dev/hidraw10 11 01 01 1b 1a 20 70 01 00 00 00 00 00 00 00 00 00 00 00 00
+    1314 tx /dev/hidraw10 10 01 01 1b 21 00 00
+    1328 rx /dev/hidraw10 11 01 01 1b 18 b0 70 01 00 00 00 00 00 00 00 00 00 00 00 00
+    1330 tx /dev/hidraw10 10 01 02 0b 00 00 00
+    1352 rx /dev/hidraw10 11 01 02 0b 04 11 22 33 44 00 02 b3 78 00 00 00 00 00 01 00
+    1352 tx /dev/hidraw10 10 01 02 1b 00 00 00
+    1367 rx /dev/hidraw10 11 01 02 1b 01 42 4c 31 88 03 00 18 00 b3 78 0d 3e 4e 89 01
+    1367 tx /dev/hidraw10 10 01 02 1b 01 00 00
+    1382 rx /dev/hidraw10 11 01 02 1b 00 52 42 4b 81 03 00 18 01 b3 78 0d 3e 4e 89 01
+    1382 tx /dev/hidraw10 10 01 02 1b 02 00 00
+    1397 rx /dev/hidraw10 11 01 02 1b 05 00 00 00 00 00 01 26 00 00 00 00 00 00 00 00
+    1397 tx /dev/hidraw10 10 01 02 1b 03 00 00
+    1419 rx /dev/hidraw10 11 01 02 1b 02 48 57 00 00 01 00 00 00 00 00 00 00 00 00 00
+    1419 tx /dev/hidraw10 10 01 02 2b 00 00 00
+    1433 rx /dev/hidraw10 11 01 02 2b 31 32 33 34 41 42 35 36 37 43 44 38 00 00 00 00
+    1434 tx /dev/hidraw10 10 01 03 0b 00 00 00
+    1456 rx /dev/hidraw10 11 01 03 0b 09 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1457 tx /dev/hidraw10 10 01 03 1b 00 00 00
+    1478 rx /dev/hidraw10 11 01 03 1b 4d 58 20 4b 65 79 73 20 53 00 00 00 00 00 00 00
+    1479 tx /dev/hidraw10 10 01 03 2b 00 00 00
+    1501 rx /dev/hidraw10 11 01 03 2b 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1502 tx /dev/hidraw10 10 01 06 0b 00 00 00
+    1523 rx /dev/hidraw10 11 01 06 0b 09 0e 09 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1524 tx /dev/hidraw10 10 01 06 1b 00 00 00
+    1547 rx /dev/hidraw10 11 01 06 1b 00 4d 58 20 4b 45 59 53 20 53 00 00 00 00 00 00
+    1547 tx /dev/hidraw10 10 01 08 0b 00 00 00
+    1568 rx /dev/hidraw10 11 01 08 0b 0f 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1569 tx /dev/hidraw10 10 01 08 1b 00 00 00
+    1583 rx /dev/hidraw10 11 01 08 1b 64 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    1584 tx /dev/hidraw10 10 01 0c 2b 00 00 00
+    1598 rx /dev/hidraw10 11 01 0c 2b 08 02 02 00 03 00 06 00 3c 00 00 00 00 00 00 00
+    1599 tx /dev/hidraw10 10 01 0c 0b 00 00 00
+    1621 rx /dev/hidraw10 11 01 0c 0b 01 0d 3d 03 00 02 03 00 06 00 04 00 00 00 00 00
