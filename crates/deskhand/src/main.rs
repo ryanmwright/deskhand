@@ -62,6 +62,10 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Print the udev rule that gives the logged-in user access to Logitech
+    /// receivers (for HID++ peripheral batteries).
+    #[cfg(feature = "hidpp")]
+    UdevRule,
     /// Print shell completions (for packagers).
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -92,6 +96,11 @@ fn main() -> anyhow::Result<()> {
             clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
             return Ok(());
         }
+        #[cfg(feature = "hidpp")]
+        Some(Command::UdevRule) => {
+            print!("{}", deskhand_linux::hidraw::UDEV_RULE);
+            return Ok(());
+        }
         _ => {}
     }
     let explicit_config = cli.config.is_some();
@@ -119,6 +128,8 @@ fn main() -> anyhow::Result<()> {
             runtime.block_on(setup::setup(&config_path, explicit_config, options))
         }
         Command::Completions { .. } | Command::Man => unreachable!("handled above"),
+        #[cfg(feature = "hidpp")]
+        Command::UdevRule => unreachable!("handled above"),
         Command::PrintDiscovery { all } => {
             runtime.block_on(print_discovery::print(&config_path, all))
         }

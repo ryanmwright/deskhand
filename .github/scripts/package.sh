@@ -8,11 +8,12 @@ out="dist/$name"
 rm -rf "$out"
 mkdir -p "$out/share/applications" "$out/share/icons/hicolor/scalable/apps" \
   "$out/share/bash-completion/completions" "$out/share/zsh/site-functions" \
-  "$out/share/fish/vendor_completions.d" "$out/share/man/man1"
+  "$out/share/fish/vendor_completions.d" "$out/share/man/man1" "$out/lib/udev/rules.d"
 install -m755 "$bin" "$out/deskhand"
 install -m644 README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$out/"
 install -m644 data/io.github.ryanmwright.Deskhand.desktop "$out/share/applications/"
 install -m644 data/io.github.ryanmwright.Deskhand.svg "$out/share/icons/hicolor/scalable/apps/"
+install -m644 data/udev/70-deskhand-logitech.rules "$out/lib/udev/rules.d/"
 "$bin" completions bash > "$out/share/bash-completion/completions/deskhand"
 "$bin" completions zsh > "$out/share/zsh/site-functions/_deskhand"
 "$bin" completions fish > "$out/share/fish/vendor_completions.d/deskhand.fish"

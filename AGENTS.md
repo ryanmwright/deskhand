@@ -25,6 +25,7 @@ Deskhand is a daemon that exposes a desktop machine to MQTT and Home Assistant: 
 - **Errors:** `thiserror` in library crates, `anyhow` in the binary.
 - **Linux desktop integration:** `zbus` (D-Bus), **pinned to 5.x** until `ksni` supports zbus 6. KDE and GNOME backends share most of this through `deskhand-linux`.
 - **Audio:** `libpulse-binding`, behind the `audio-pulse` feature. It is the only runtime C dependency.
+- **Logitech HID++:** `openlogi-hidpp` (lib `hidpp`, 0BSD), pinned exactly, used only in `deskhand-hidpp/src/adapter.rs`. Linux reaches it over `/dev/hidraw*` (`deskhand_linux::hidraw`, `AsyncFd`; its `AsyncFd::register` is the workspace's only `unsafe`).
 - **macOS:** `objc2` bindings (future backend).
 - **Windows:** the `windows` crate (future backend).
 - Dependency versions live only in `[workspace.dependencies]` in the root `Cargo.toml`. Crates use `foo.workspace = true`.
@@ -42,6 +43,8 @@ crates/
                       # derived sensors, domain kits (media/audio/power)
   deskhand-linux/     # shared freedesktop integrations (logind, MPRIS, UPower, BlueZ, ...)
   deskhand-kde/       # KDE Plasma backend (KWin, PowerDevil, kglobalaccel, ...)
+  deskhand-hidpp/     # Logitech HID++ receivers (platform-neutral; HidBackend trait,
+                      # peripheral battery source); only adapter.rs uses `hidpp`
   deskhand-testkit/   # dev-only: FakeTransport, private D-Bus buses, mocks, broker container
   deskhand/           # binary: CLI, wiring, cargo features, setup wizard, doctor, tray
   # future: deskhand-gnome, deskhand-macos, deskhand-windows
@@ -49,7 +52,7 @@ crates/
 
 - `deskhand-core` defines one `Integration` trait. Integrations register entities through `Ctx` and get typed handles back (`Sensor`, `Switch` plus a command stream, and so on). Per-capability traits are deliberately not used.
 - Each backend returns candidate integrations grouped by capability, in priority order. The supervisor probes them and starts the first available one per capability.
-- **Plugins are compile-time**, selected with cargo features on the `deskhand` binary (`kde`, `linux`, `tray`, `setup`, `audio-pulse`). Do not use dynamic loading; Rust handles it poorly and compile-time selection is simpler and safer.
+- **Plugins are compile-time**, selected with cargo features on the `deskhand` binary (`kde`, `linux`, `tray`, `setup`, `audio-pulse`, `hidpp`). Do not use dynamic loading; Rust handles it poorly and compile-time selection is simpler and safer.
 - A backend only registers the capabilities its platform supports. The core must not assume any capability exists.
 - Core API in brief: `Integration { id, capability, description, probe, run(&self, ctx) }`. `Ctx` hands out handles (`ctx.sensor(spec)`, `ctx.switch(spec) -> (Switch, Commands<bool>)`, ...). Call `ctx.ready()` once the initial states are set. An entity can sit on a Home Assistant device of its own with `EntitySpec::on_device(Arc<SubDevice>)` (peripherals, receivers). The hub owns all state; the transport gets `HubEvent`s and requests a full `Snapshot` on every (re)connect.
 - Tests that need a transport use `deskhand_core::testing::FakeTransport` (feature `test-util`, re-exported by `deskhand-testkit`) and `#[tokio::test(start_paused = true)]`.
@@ -99,4 +102,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-All V1 milestones (M0–M14) are done. v0.1.1 is the first release (v0.1.0 was tagged but never published); the release workflow creates a draft to publish. Power buttons are opt-in (none by default). The two host checks below were assumed good for the tag; the user confirms them later. Next step: **M15 (headless mode and herdr)**, planned in `docs/v1-plan.md`; start by reading `herdr api schema --json`. Also planned, independent of M15: **M16–M19 (Logitech HID++ peripheral batteries)**; M16 (probe on the KDE host) and M17 (sub-devices, `peripheral_battery`) are done, so M18 (the HID++ source) is next there. Still open: the binary-cache CI decision (plan, M13). Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.
+All V1 milestones (M0–M14) are done. v0.1.1 is the first release (v0.1.0 was tagged but never published); the release workflow creates a draft to publish. Power buttons are opt-in (none by default). The two host checks below were assumed good for the tag; the user confirms them later. Next step: **M15 (headless mode and herdr)**, planned in `docs/v1-plan.md`; start by reading `herdr api schema --json`. Also planned, independent of M15: **M16–M19 (Logitech HID++ peripheral batteries)**; M16 (probe on the KDE host), M17 (sub-devices, `peripheral_battery`) and M18 (the HID++ source, mock-tested) are done, so M19 (backlight, docs, KDE host check) is next there. Still open: the binary-cache CI decision (plan, M13). Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.

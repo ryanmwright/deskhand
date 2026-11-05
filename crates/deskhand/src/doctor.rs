@@ -29,6 +29,43 @@ pub struct Report {
     /// `failed`, `not installed`, ...); absent without systemd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// Logitech HID++ nodes (receivers and their devices).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub logitech: Vec<LogitechNode>,
+    /// The command that installs the udev rule, when a Logitech node can't
+    /// be opened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udev_hint: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogitechNode {
+    pub node: String,
+    pub product: String,
+    pub driver: Option<String>,
+    /// `ok`, `denied` or an error.
+    pub access: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unique_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<LogitechDevice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogitechDevice {
+    pub slot: u8,
+    pub name: Option<String>,
+    pub wpid: String,
+    pub kind: Option<&'static str>,
+    pub online: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +137,7 @@ fn features() -> Vec<&'static str> {
         (cfg!(feature = "tray"), "tray"),
         (cfg!(feature = "setup"), "setup"),
         (cfg!(feature = "audio-pulse"), "audio-pulse"),
+        (cfg!(feature = "hidpp"), "hidpp"),
     ] {
         if on {
             f.push(name);
@@ -166,10 +204,17 @@ pub async fn report(config_path: &Path) -> Report {
                 mqtt: None,
                 integrations: Vec::new(),
                 service,
+                logitech: Vec::new(),
+                udev_hint: None,
             };
         }
     };
-    let (mqtt, integrations) = tokio::join!(check_mqtt(&setup), check_integrations(&setup));
+    let (mqtt, integrations, logitech) = tokio::join!(
+        check_mqtt(&setup),
+        check_integrations(&setup),
+        check_logitech()
+    );
+    let udev_hint = logitech_hint(&logitech);
     Report {
         ok: mqtt.connected && integrations.iter().all(|c| c.error.is_none()),
         version: deskhand_core::VERSION,
@@ -187,7 +232,68 @@ pub async fn report(config_path: &Path) -> Report {
         mqtt: Some(mqtt),
         integrations,
         service,
+        logitech,
+        udev_hint,
     }
+}
+
+/// Logitech receivers, their devices and batteries.
+#[cfg(feature = "hidpp")]
+async fn check_logitech() -> Vec<LogitechNode> {
+    use deskhand_hidpp::Access;
+    let backend = deskhand_linux::hidraw::LinuxHidraw::new();
+    let Ok(report) = deskhand_hidpp::inspect(&backend).await else {
+        return Vec::new();
+    };
+    report
+        .into_iter()
+        .map(|n| LogitechNode {
+            node: n.node.id.clone(),
+            product: format!(
+                "{:04x}:{:04x} {}",
+                n.node.vendor, n.node.product, n.node.name
+            ),
+            driver: n.node.driver.clone(),
+            access: match &n.access {
+                Access::Ok => "ok".into(),
+                Access::Denied => "denied".into(),
+                Access::Error(e) => e.clone(),
+            },
+            receiver: n.receiver.as_ref().map(|r| r.name.to_owned()),
+            unique_id: n.receiver.as_ref().and_then(|r| r.unique_id.clone()),
+            firmware: n.receiver.as_ref().and_then(|r| r.firmware.clone()),
+            devices: n
+                .receiver
+                .iter()
+                .flat_map(|r| &r.devices)
+                .map(|d| LogitechDevice {
+                    slot: d.slot,
+                    name: d.name.clone(),
+                    wpid: format!("{:04X}", d.wpid),
+                    kind: d.kind,
+                    online: d.online,
+                    battery: d.battery.clone(),
+                })
+                .collect(),
+            error: n.error,
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "hidpp"))]
+async fn check_logitech() -> Vec<LogitechNode> {
+    Vec::new()
+}
+
+/// The udev install command, only when a node can't be opened. Solaar's
+/// rules grant the same access, so either one is fine.
+fn logitech_hint(nodes: &[LogitechNode]) -> Option<&'static str> {
+    #[cfg(feature = "hidpp")]
+    if nodes.iter().any(|n| n.access == "denied") {
+        return Some(deskhand_linux::hidraw::UDEV_INSTALL_HINT);
+    }
+    let _ = nodes;
+    None
 }
 
 async fn check_mqtt(setup: &Setup) -> MqttReport {
@@ -384,5 +490,58 @@ pub fn print_text(r: &Report) {
                 cand.detail.as_deref().unwrap_or("")
             );
         }
+    }
+    print_logitech(r);
+}
+
+fn print_logitech(r: &Report) {
+    if r.logitech.is_empty() {
+        return;
+    }
+    println!();
+    println!("Logitech receivers:");
+    for n in &r.logitech {
+        let ok = n.access == "ok" && n.error.is_none();
+        let what = n.receiver.as_deref().unwrap_or("not a receiver");
+        println!(
+            "{} {} {what} ({}, driver {})",
+            if ok { "✓" } else { "✗" },
+            n.node,
+            n.product,
+            n.driver.as_deref().unwrap_or("none"),
+        );
+        match n.access.as_str() {
+            "ok" => {}
+            "denied" => println!("    permission denied (udev rule missing)"),
+            other => println!("    cannot open: {other}"),
+        }
+        if let Some(e) = &n.error {
+            println!("    {e}");
+        }
+        if let Some(id) = &n.unique_id {
+            let fw = n
+                .firmware
+                .as_deref()
+                .map_or(String::new(), |f| format!(", firmware {f}"));
+            println!("    unique id {id}{fw}");
+        }
+        for d in &n.devices {
+            let kind = d.kind.map_or(String::new(), |k| format!(" {k}"));
+            let state = if d.online { "connected" } else { "asleep" };
+            let battery = d
+                .battery
+                .as_deref()
+                .map_or(String::new(), |b| format!(", battery {b}"));
+            println!(
+                "    slot {}: {} ({}{kind}) {state}{battery}",
+                d.slot,
+                d.name.as_deref().unwrap_or("?"),
+                d.wpid
+            );
+        }
+    }
+    if let Some(hint) = r.udev_hint {
+        println!("    To allow access (one-time, as root):");
+        println!("      {hint}");
     }
 }

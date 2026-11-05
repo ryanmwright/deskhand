@@ -8,14 +8,15 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["audio-pulse"]
+default = ["audio-pulse", "hidpp"]
 audio-pulse = ["dep:libpulse-binding"]
-hidpp = ["dep:hidpp"]
+hidpp = ["dep:hidpp", "dep:deskhand-hidpp"]
 
 [dependencies]
 async-trait.workspace = true
 deskhand-common.workspace = true
 deskhand-core.workspace = true
+deskhand-hidpp = { workspace = true, optional = true }
 futures-util.workspace = true
 hidpp = { workspace = true, optional = true }
 rustix.workspace = true

@@ -127,7 +127,8 @@ The other options, by capability:
 | `media` | `compat_mqtt_media_player` | `false` | Also publish a media player entity for the HACS [mqtt_media_player](https://github.com/bkbilly/mqtt_media_player) integration ([home-assistant.md](home-assistant.md#a-media-player-card)). |
 | `audio` | `mic_ignore_apps` | `[]` | More apps whose recordings don't count as "microphone in use" (volume meters like pavucontrol are already ignored). |
 | `camera` | `ignore_processes` | `[]` | Processes whose camera use doesn't count. |
-| `peripheral_battery` | `sources` | all `"auto"` | Per source, `"auto"`, `true` or `false`: `[integrations.peripheral_battery.sources]` with `upower = false` turns off UPower's peripheral batteries. |
+| `peripheral_battery` | `sources` | all `"auto"` | Per source, `"auto"`, `true` or `false`: `[integrations.peripheral_battery.sources]` with `upower = false` turns off UPower's peripheral batteries, `hidpp = false` the [Logitech receivers](#logitech-receivers). |
+| `peripheral_battery` | `battery_refresh` | `"off"` | Also re-read connected Logitech devices this often (at least `"1m"`). Not needed: they report every change themselves, and every wake from sleep. |
 | `bluetooth` | `devices` | `"paired"` | `"paired"`, or a list of addresses (`["AA:BB:CC:DD:EE:FF"]`), for the per-device connect switches. |
 | `systemd` | `units` | `[]` | systemd **user** units Home Assistant may start and stop, by full name. Only these. |
 | `metrics` | `interval` | `"30s"` | |
@@ -208,6 +209,47 @@ invoke = [
 Each becomes a `kde_shortcut_<id>` button (`id` defaults to the action, made
 lowercase). Find component and action names in `~/.config/kglobalshortcutsrc`:
 the section is the component, the key before `=` is the action.
+
+## Logitech receivers
+
+Keyboards and mice on a Logi Bolt or Unifying receiver report their battery
+over Logitech's HID++ protocol. The kernel does not do that for Bolt (and
+`upower -d` shows nothing), so Deskhand talks to the receiver itself through
+`/dev/hidraw*`. Each keyboard or mouse becomes a device in Home Assistant,
+linked to the receiver, with the entities from
+[entities.md](entities.md#peripheral-batteries). Deskhand never asks a
+sleeping device anything: it updates when the device wakes up or reports a
+change (charging, unplugged), so nothing is polled.
+
+The hidraw nodes belong to root until a udev rule hands them to the logged-in
+user. That is a one-time step per machine, as root. `deskhand doctor` lists the
+receivers and says when the rule is missing; `deskhand setup` offers to
+install it. By hand:
+
+```sh
+deskhand udev-rule | sudo tee /etc/udev/rules.d/70-deskhand-logitech.rules >/dev/null
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+The release tarball also has the rule in `lib/udev/rules.d/`. On NixOS, add the
+package to `services.udev.packages` in the system configuration (the Home
+Manager module can't install udev rules):
+
+```nix
+services.udev.packages = [ inputs.deskhand.packages.${pkgs.system}.default ];
+```
+
+If Solaar's udev rules are installed (Fedora, Arch, Debian and Ubuntu package
+them), Deskhand needs nothing more: they grant the same access. Deskhand and
+Solaar can run at the same time.
+
+The rule only covers the user of the active local session (`uaccess`).
+Running headless as another user would need a group-based rule instead
+(`GROUP="…", MODE="0660"`).
+
+Once the rule is in place, Deskhand picks the receiver up within five minutes,
+or right away after `systemctl --user restart deskhand`. Receivers plugged in
+later are found at once.
 
 ## Home Manager
 

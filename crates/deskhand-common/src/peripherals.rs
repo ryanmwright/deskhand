@@ -30,6 +30,10 @@
 //! [integrations.peripheral_battery.sources]
 //! upower = "auto"   # "auto" | true | false, per source
 //! hidpp = "auto"
+//!
+//! [integrations.peripheral_battery]
+//! battery_refresh = "off"  # or "30m": re-read connected devices of sources
+//!                          # that otherwise only listen for changes (HID++)
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -240,6 +244,7 @@ enum Msg {
 pub struct PeripheralSink {
     source: &'static str,
     tx: mpsc::UnboundedSender<Msg>,
+    battery_refresh: Option<Duration>,
 }
 
 impl std::fmt::Debug for PeripheralSink {
@@ -278,6 +283,13 @@ impl PeripheralSink {
     pub fn ready(&self) {
         self.send(Msg::Settled(self.source));
     }
+
+    /// `battery_refresh`: how often to re-read connected devices, for
+    /// sources that otherwise only listen for changes. `None` (the default):
+    /// never.
+    pub fn battery_refresh(&self) -> Option<Duration> {
+        self.battery_refresh
+    }
 }
 
 /// One way of finding peripheral batteries.
@@ -302,6 +314,25 @@ pub trait PeripheralSource: Send + Sync + 'static {
 pub struct PeripheralOptions {
     /// Per source id: `auto` (default), `true` or `false`.
     pub sources: BTreeMap<String, Enabled>,
+    /// `"off"` (default) or a duration such as `"30m"`.
+    #[serde(deserialize_with = "off_or_duration")]
+    pub battery_refresh: Option<Duration>,
+}
+
+/// `"off"` → `None`; otherwise a humantime duration (at least a minute).
+fn off_or_duration<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
+    let text = String::deserialize(d)?;
+    if text.trim() == "off" {
+        return Ok(None);
+    }
+    let every = humantime_serde::re::humantime::parse_duration(text.trim())
+        .map_err(serde::de::Error::custom)?;
+    if every < Duration::from_secs(60) {
+        return Err(serde::de::Error::custom(
+            "battery_refresh must be at least 1m",
+        ));
+    }
+    Ok(Some(every))
 }
 
 /// The `peripheral_battery` integration. Sources earlier in the list win
@@ -391,6 +422,7 @@ impl Integration for PeripheralBattery {
             let sink = PeripheralSink {
                 source: source.id(),
                 tx: tx.clone(),
+                battery_refresh: options.battery_refresh,
             };
             tokio::spawn(supervise(
                 source.clone(),
@@ -1110,6 +1142,27 @@ mod tests {
         );
         other_tx.send(FakeMsg::Update(keyboard(50.0))).unwrap();
         wait_attr(&mut t, &id("battery_mx_keys_s"), "source", json!("other")).await;
+    }
+
+    #[test]
+    fn battery_refresh_option() {
+        let parse = |toml: &str| {
+            Config::from_toml_str(toml, None)
+                .unwrap()
+                .integration(CAPABILITY)
+                .unwrap()
+                .options::<PeripheralOptions>()
+                .map(|p| p.value.battery_refresh)
+        };
+        assert_eq!(parse("").unwrap(), None);
+        let section = "[integrations.peripheral_battery]\nbattery_refresh = ";
+        assert_eq!(parse(&format!("{section}\"off\"")).unwrap(), None);
+        assert_eq!(
+            parse(&format!("{section}\"30m\"")).unwrap(),
+            Some(Duration::from_secs(1800))
+        );
+        assert!(parse(&format!("{section}\"10s\"")).is_err());
+        assert!(parse(&format!("{section}\"often\"")).is_err());
     }
 
     #[test]

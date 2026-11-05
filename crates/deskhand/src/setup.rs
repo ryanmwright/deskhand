@@ -696,6 +696,9 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
         println!("  (the old config is in {})", b.display());
     }
 
+    #[cfg(feature = "hidpp")]
+    offer_udev_rule(interactive)?;
+
     if o.no_service {
         return Ok(());
     }
@@ -725,6 +728,78 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
     println!(
         "The device should appear in Home Assistant under Settings → Devices & services → MQTT."
     );
+    Ok(())
+}
+
+/// Offers to install the udev rule when a Logitech receiver is present
+/// but can't be opened (peripheral batteries over HID++). Solaar's rules
+/// grant the same access, so nothing is offered when they are installed.
+#[cfg(feature = "hidpp")]
+fn offer_udev_rule(interactive: bool) -> anyhow::Result<()> {
+    use deskhand_hidpp::{Access, HidBackend};
+    use deskhand_linux::hidraw::{LinuxHidraw, UDEV_INSTALL_HINT, UDEV_RULE, UDEV_RULE_PATH};
+
+    let backend = LinuxHidraw::new();
+    let Ok(nodes) = backend.enumerate() else {
+        return Ok(());
+    };
+    let denied = deskhand_hidpp::candidates(&nodes).any(|n| backend.access(n) == Access::Denied);
+    if !denied {
+        return Ok(());
+    }
+    println!();
+    println!("A Logitech receiver is connected, but Deskhand can't open it, so its keyboard and");
+    println!(
+        "mouse batteries won't show up. A udev rule (like Solaar's) fixes that, once per machine."
+    );
+    if Path::new("/etc/NIXOS").exists() {
+        println!("On NixOS, add the package's rule to your system configuration:");
+        println!("  services.udev.packages = [ deskhand ];  # the package that provides deskhand");
+        return Ok(());
+    }
+    let commands = [
+        format!("sudo tee {UDEV_RULE_PATH} >/dev/null   (the rule from `deskhand udev-rule`)"),
+        "sudo udevadm control --reload".to_owned(),
+        "sudo udevadm trigger --subsystem-match=hidraw".to_owned(),
+    ];
+    if !interactive {
+        println!("Install it with:\n  {UDEV_INSTALL_HINT}");
+        return Ok(());
+    }
+    println!("This runs:");
+    for c in &commands {
+        println!("  {c}");
+    }
+    let install = inquire::Confirm::new("Install the udev rule now (asks for your sudo password)?")
+        .with_default(true)
+        .prompt()?;
+    if !install {
+        println!("Later: {UDEV_INSTALL_HINT}");
+        return Ok(());
+    }
+    let mut tee = std::process::Command::new("sudo")
+        .args(["tee", UDEV_RULE_PATH])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .context("cannot run sudo")?;
+    tee.stdin
+        .take()
+        .context("no stdin for sudo tee")?
+        .write_all(UDEV_RULE.as_bytes())?;
+    if !tee.wait()?.success() {
+        bail!("installing {UDEV_RULE_PATH} failed");
+    }
+    for args in [
+        &["udevadm", "control", "--reload"][..],
+        &["udevadm", "trigger", "--subsystem-match=hidraw"][..],
+    ] {
+        let status = std::process::Command::new("sudo").args(args).status()?;
+        if !status.success() {
+            bail!("sudo {} failed", args.join(" "));
+        }
+    }
+    println!("✓ Installed {UDEV_RULE_PATH}");
     Ok(())
 }
 

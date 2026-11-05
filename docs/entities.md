@@ -43,11 +43,14 @@ unavailable except `session_state` and `deskhand_connected`, which keep showing
 ## Peripheral batteries
 
 Keyboards, mice, headsets and other battery devices, from UPower (the kernel's
-battery reports, Bluetooth) and later Logitech receivers. **Each peripheral is
-its own Home Assistant device**, linked to the computer (or to its receiver),
-with its model, serial number and firmware in the device info. `<key>` is the
-model name as a slug, for example `mx_master_3`. A device that two sources see
-is one device.
+battery reports, Bluetooth) and from Logitech Bolt and Unifying receivers over
+HID++ ([setup](configuration.md#logitech-receivers)). **Each peripheral is its
+own Home Assistant device**, linked to the computer (or to its receiver), with
+its model, model ID, serial number and firmware in the device info. `<key>` is
+the model name as a slug, for example `mx_master_3` (for a receiver's devices,
+the name the receiver stores, such as `MX KEYS S` → `mx_keys_s`). A device that
+two sources see is one device; HID++ is used while it has a link to the
+device, UPower otherwise.
 
 | Id | Type | |
 |---|---|---|
@@ -56,10 +59,12 @@ is one device.
 | `battery_<key>_low` | binary sensor | The device's own warning, else 15 % or less. |
 | `battery_<key>_connected` | binary sensor | Off while the peripheral sleeps or is out of range; the battery keeps its last value. |
 | `battery_<key>_updated` | timestamp (diagnostic) | When the battery was last read. |
-| `<receiver>_paired` | sensor (diagnostic) | On a receiver's device: how many devices are paired; attribute `slots`. |
+| `<receiver>_paired` | sensor (diagnostic) | On a receiver's device (`bolt_<unique id>`, `unifying_<unique id>`): how many devices are paired; attribute `slots` (slot, name, model ID, online). |
 
 A peripheral's device and entities go away when it is no longer reported (for
-example unpaired or unplugged), not while it sleeps.
+example unpaired or unplugged), not while it sleeps. A Logitech keyboard keeps
+its last values while asleep (after about 10 minutes untouched) and while its
+receiver is unplugged; `updated` shows when it last reported.
 
 ## Media
 

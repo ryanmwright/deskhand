@@ -702,6 +702,7 @@ dependencies = [
  "clap_mangen",
  "deskhand-common",
  "deskhand-core",
+ "deskhand-hidpp",
  "deskhand-kde",
  "deskhand-linux",
  "deskhand-mqtt",
@@ -759,6 +760,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "deskhand-hidpp"
+version = "0.1.1"
+dependencies = [
+ "async-channel",
+ "async-trait",
+ "deskhand-common",
+ "deskhand-core",
+ "openlogi-hidpp",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "deskhand-kde"
 version = "0.1.1"
 dependencies = [
@@ -789,6 +805,7 @@ dependencies = [
  "bytes",
  "deskhand-common",
  "deskhand-core",
+ "deskhand-hidpp",
  "deskhand-testkit",
  "futures-util",
  "inotify",

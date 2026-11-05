@@ -22,6 +22,16 @@ section of the tagged version as the release notes.
 
 ### Added
 
+- **Logitech receivers (HID++).** Keyboards and mice on a Logi Bolt or
+  Unifying receiver report battery, charging state, low battery and
+  connection, even where the kernel and UPower don't see them (Bolt). Each is
+  its own device, linked to its receiver's device (unique ID, firmware,
+  `paired` sensor). Readings come from the devices' own events and each wake
+  from sleep; sleeping devices are never contacted, and nothing is polled
+  unless `battery_refresh` is set. Needs a one-time udev rule (or Solaar's):
+  `deskhand udev-rule`, offered by `deskhand setup`, shipped in the tarball
+  and the Nix package (`lib/udev/rules.d`). `deskhand doctor` lists receivers,
+  paired devices and batteries. Cargo feature `hidpp` (default).
 - Per peripheral: `battery_<model>_state`, `_low`, `_connected` and
   `_updated` (time of the last reading). A sleeping peripheral keeps its last
   battery value; only `connected` turns off.

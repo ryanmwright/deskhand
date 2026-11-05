@@ -8,8 +8,10 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["kde", "tray", "setup", "audio-pulse"]
+default = ["kde", "tray", "setup", "audio-pulse", "hidpp"]
 linux = ["dep:deskhand-linux"]
+# Logitech HID++ peripheral batteries (receivers over /dev/hidraw).
+hidpp = ["linux", "deskhand-linux/hidpp", "dep:deskhand-hidpp"]
 kde = ["linux", "dep:deskhand-kde"]
 audio-pulse = ["deskhand-linux?/audio-pulse"]
 tray = ["dep:ksni"]
@@ -22,6 +24,7 @@ clap_complete.workspace = true
 clap_mangen.workspace = true
 deskhand-common.workspace = true
 deskhand-core.workspace = true
+deskhand-hidpp = { workspace = true, optional = true }
 deskhand-kde = { workspace = true, optional = true }
 deskhand-linux = { workspace = true, optional = true }
 deskhand-mqtt.workspace = true

@@ -1204,16 +1204,16 @@ M15.
     checked on the KDE host in M19.
 
 #### M18: HID++ source
-- [ ] `crates/deskhand-hidpp` (platform-neutral) wrapping `hidpp` in one adapter module.
+- [x] `crates/deskhand-hidpp` (platform-neutral) wrapping `hidpp` in one adapter module.
       - `HidBackend` trait (`enumerate`, `open -> RawHidChannel`, `hotplug`), so macOS IOHID and
         Windows HID can be added later.
       - `Leased` software IDs, so Solaar, OpenLogi or the kernel driver can share the node.
-- [ ] Receiver task.
+- [x] Receiver task.
       - Set notification flags (`hid-generic` sets none).
       - Collect pairings (slot, WPID, kind, unit ID/serial, codename) and the receiver's unique ID
         and firmware.
       - Trigger device arrival, so link states arrive without contacting sleeping devices.
-- [ ] Device on link-up.
+- [x] Device on link-up.
       - Feature discovery once, then identity, then one battery read: 0x1004, else 0x1000, else
         0x1001.
       - After that, battery comes only from the device's own events.
@@ -1221,16 +1221,16 @@ M15.
       - A link-up or 0x1D4B reconnect triggers one re-read.
       - A sleeping device is never queried.
       - `battery_refresh` (default `off`, set by M16) re-reads only connected devices.
-- [ ] Receiver gone (`ENODEV`, read error): its devices report disconnected and the source waits
+- [x] Receiver gone (`ENODEV`, read error): its devices report disconnected and the source waits
       for hotplug. Unpairing removes the device.
-- [ ] `deskhand-linux/src/hidraw.rs`.
+- [x] `deskhand-linux/src/hidraw.rs`.
       - Enumerates `/sys/class/hidraw/*/device` (vendor 046d) and picks the interface from the
         report descriptor (vendor page 0xFF00, report IDs 0x10/0x11).
       - I/O with `AsyncFd`; hotplug with inotify on `/dev`.
       - Probe reason for `EACCES` points to the udev rule.
-- [ ] Wiring: feature `hidpp` (in `default` and `linux`); `doctor` shows receivers, driver,
+- [x] Wiring: feature `hidpp` (in `default` and `linux`); `doctor` shows receivers, driver,
       permissions, slots and batteries.
-- [ ] `data/udev/70-deskhand-logitech.rules` (`TAG+="uaccess"` for Logitech receivers and
+- [x] `data/udev/70-deskhand-logitech.rules` (`TAG+="uaccess"` for Logitech receivers and
       HID++ Bluetooth devices; added in M16).
       - Installed to `$out/lib/udev/rules.d`; docs for NixOS `services.udev.packages` and for
         installing it by hand from the tarball.
@@ -1242,7 +1242,7 @@ M15.
       - `uaccess` only covers the user of the active local session. Headless mode (M15) would
         need a group-based variant (`GROUP=…, MODE="0660"`); document it there.
       - Security note: same access as Solaar.
-- [ ] Tests with a `MockReceiver: RawHidChannel` and replays of the M16 captures:
+- [x] Tests with a `MockReceiver: RawHidChannel` and replays of the M16 captures:
       - Startup with a sleeping device.
       - Wake gives exactly one read.
       - Events arrive without requests (polling check).
@@ -1250,6 +1250,51 @@ M15.
       - Unpairing.
       - Devices with only 0x1000 or only 0x1001.
       - Sysfs fixture tree for enumeration.
+- **Status:** done (2026-11-04), checked with mocks only; the host check is M19. Deviations:
+  - **Crate layout.** `deskhand-hidpp` holds the `HidBackend`/`Hotplug` traits, the
+    `HidppSource`, the receiver task and `inspect` (for doctor). Only `adapter.rs` uses
+    `hidpp`. `deskhand-linux::hidraw` implements the backend (`LinuxHidraw`).
+  - **Events.** One listener per channel decodes every unclaimed report: 0x41 links, 0x40
+    unpairing (address 0x02, as Solaar reads it), and HID++ 2.0 events (software id 0). Each
+    device maps them by its own feature indices. Replies to other clients (Solaar's id 7)
+    are dropped. `hidpp`'s per-feature event sources are not used, and the 0x1000/0x1001
+    broadcasts are decoded the same way.
+  - **Discovery.** Root `getFeature` lookups for 0x0003, 0x0005, 0x1004 (else 0x1000, else
+    0x1001) and 0x1D4B, not the whole feature table: about 8 requests instead of 34.
+  - **Pairings** come from device arrival (0x41 per paired device, queued before the
+    register ack) for both receiver kinds; codenames from 0xB5 0x6N (Bolt) or 0x4(N-1)
+    (Unifying). Bolt pairing info (0xB5 0x5N) is not read: arrival already has the WPID,
+    kind and link. The unit ID is not used.
+  - **Keys.** A device is keyed by the receiver's codename (known while it sleeps), else
+    its 0x0005 name, fixed once reported. The device shows its 0x0005 name once read. The
+    model ID is the WPID (`B378`). The receiver is `bolt_<unique id>` / `unifying_<…>`;
+    its firmware comes from register 0xF1 (best effort, unverified on Bolt).
+  - **Wake.** On a link-up of a known device (or 0x1D4B reconnect), one read only if no
+    battery report arrives within 3 s. A failed discovery is retried while the device stays
+    connected (30 s, doubling, at most 10 min).
+  - **Receiver loss.** Its devices are reported disconnected and keep their values; the
+    source reopens the node on hotplug. A dead channel under a reused node name is
+    detected by `is_connected`.
+  - **Software ids:** leased per node in-process from 0x0B upwards (doctor's `inspect`
+    from the other end), via `SwIdPolicy::Leased`.
+  - **hidraw I/O** uses `AsyncFd`. tokio 1.54 deprecated the safe `AsyncFd::new` as
+    unsound, so this is the workspace's one `unsafe` block (`AsyncFd::register` on an
+    owned `File`, with a SAFETY note). The descriptor check accepts report 0x10/0x11 on any
+    vendor page (≥ 0xFF00). Hotplug is inotify on `/dev` (create, delete, attrib for udev's
+    ACLs), settled for 750 ms.
+  - **Probe:** available without receivers, so a receiver plugged in later is picked up at
+    once. Unavailable only when every Logitech node is denied, with the install command.
+  - **`battery_refresh`** is a `[integrations.peripheral_battery]` option (`"off"` or
+    ≥ `"1m"`), handed to sources through the sink.
+  - **udev:** `deskhand udev-rule` prints the embedded rule. `doctor` shows
+    `UDEV_INSTALL_HINT` only when a node is denied. `setup` installs it with `sudo tee` +
+    `udevadm` after showing the commands; on NixOS it prints the `services.udev.packages`
+    line instead. The rule is installed only when the package's `hidpp` feature is on.
+  - **Tests:** 10 source tests against a scripted `MockReceiver` (Bolt), replaying the M16
+    event capture. They cover start-up asleep, wake with and without the unasked report,
+    no polling, receiver loss and return, node-name reuse, unpairing, 0x1000/0x1001
+    devices, `battery_refresh`, probe and `inspect`. Plus adapter decoding tests and a
+    sysfs tree of the KDE host for enumeration.
 
 #### M19: Backlight, docs, host check
 - [ ] Backlight (0x1982), opt-in with `controls = ["backlight"]`.
@@ -1323,6 +1368,7 @@ M15.
 | 2026-11-04 | Planning | M16–M19 planned with the user: Logitech HID++ peripheral batteries (MX Keys S on Bolt is invisible to the kernel and UPower). Generic `peripheral_battery` integration merging UPower and HID++ sources, per-peripheral HA devices (accepted one-time move of `battery_<model>`), `openlogi-hidpp` (0BSD) for the protocol (needs Rust 1.99), backlight the only opt-in control |
 | 2026-11-04 | M16 (part) | Toolchain moved to Rust 1.99 (`nixpkgs-rust` input for the devShell and crane); `openlogi-hidpp =0.9.0` pinned. `deskhand_linux::hidraw` (sysfs enumeration, `RawHidChannel` with poll and plain read/write, no unsafe) and `hidpp_probe` (receiver, pairings, features, identity, battery, backlight, 120 s event watch, hex capture). Tested over a socketpair against `HidppChannel`. CI uploads the probe with a udev rule. Waiting for the run on the KDE host (`docs/dev/spikes.md` §9) |
 | 2026-11-04 | M16 | Two probe runs on the KDE host (Fedora 44). Bolt on `hid-generic` confirmed; identity, 0x1004 and 0x1982 work through `openlogi-hidpp` with events; sleep is a 0x41 link-down after ~10 min, and wake brings 0x41 + 0x1d4b + an unasked battery report, so no polling (`battery_refresh` off). Solaar's udev rules give access; Solaar shares the node (software-ID matching). Captures saved as fixtures with decoding tests. Probe now skips kernel-owned nodes, logs only HID++ and logs node changes |
+| 2026-11-04 | M18 | `deskhand-hidpp` (platform-neutral: `HidBackend`, `HidppSource`, receiver task, `inspect`, one `hidpp` adapter with leased software ids and a single notice decoder). Linux `LinuxHidraw` (HID++ descriptor check, `AsyncFd` I/O, inotify hotplug). Event-driven: discovery and one read on the first link-up, then only the devices' own reports; a sleeping device is never contacted. `battery_refresh` option, doctor section, `deskhand udev-rule`, setup offer, rule in the Nix package and tarball. 14 crate tests on a scripted Bolt mock with the M16 capture replayed, plus hidraw and option tests. No Logitech hardware here: the host check is M19 |
 | 2026-11-04 | M17 | Sub-devices: `SubDevice` on `EntitySpec`, one retained MQTT document per device under `homeassistant/device/deskhand_<node>/<key>/config` (adopted, kept, stubbed and deleted like the main one; uninstall and print-discovery cover them). `peripherals.rs` in common: sources, sink, merge by key or serial, five entities per peripheral on its own device, receivers as devices, per-source supervision and config. UPower peripherals are now a source (same `battery_<model>` ids) with state, low, connected and updated. Dev HA keeps entity ids and history when an entity moves to a sub-device. New snapshot, 4 planner tests, broker test, 6 merge tests, UPower mock test |
 
 ## Verification (whole V1)

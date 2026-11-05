@@ -12,6 +12,7 @@
     "tray"
     "setup"
     "audio-pulse"
+    "hidpp"
   ],
 }:
 craneLib.buildPackage (
@@ -30,6 +31,10 @@ craneLib.buildPackage (
       mkdir -p $out/share/systemd/user
       substitute data/deskhand.service.in $out/share/systemd/user/deskhand.service \
         --subst-var-by bindir $out/bin
+    ''
+    # NixOS: services.udev.packages = [ deskhand ];
+    + lib.optionalString (lib.elem "hidpp" features) ''
+      install -Dm644 data/udev/70-deskhand-logitech.rules -t $out/lib/udev/rules.d
     ''
     + lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
       installShellCompletion --cmd deskhand \

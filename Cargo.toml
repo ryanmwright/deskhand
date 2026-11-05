@@ -24,6 +24,7 @@ deskhand-common = { path = "crates/deskhand-common", version = "0.1.1" }
 deskhand-linux = { path = "crates/deskhand-linux", version = "0.1.1", default-features = false }
 deskhand-kde = { path = "crates/deskhand-kde", version = "0.1.1" }
 deskhand-testkit = { path = "crates/deskhand-testkit", version = "0.1.1" }
+deskhand-hidpp = { path = "crates/deskhand-hidpp", version = "0.1.1" }
 
 # Runtime
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "signal", "time", "process", "fs", "sync", "net", "io-util"] }
