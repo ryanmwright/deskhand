@@ -11,11 +11,17 @@
 //!   (service missing, still probing) are kept as they were, so HA keeps the
 //!   entities (and the user's customisations) and shows them unavailable;
 //! - components of disabled capabilities are removed.
+//!
+//! Entities on a [`SubDevice`] (a keyboard, a receiver) go into a document of
+//! their own at `<discovery>/device/deskhand_<node>/<key>/config`, tracked the
+//! same way; a sub-device document with nothing left in it is deleted, which
+//! removes that device from HA.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use deskhand_core::DeviceInfo;
-use deskhand_core::entity::{AvailabilityScope, EntityKind, ImageSource};
+use deskhand_core::entity::{AvailabilityScope, EntityKind, ImageSource, SubDevice};
 use deskhand_core::transport::EntityDescriptor;
 use serde_json::{Map, Value, json};
 
@@ -225,12 +231,8 @@ pub fn connected_component(topics: &Topics) -> Map<String, Value> {
     c
 }
 
-/// The whole device document.
-pub fn device_config(
-    topics: &Topics,
-    device: &DeviceInfo,
-    components: &BTreeMap<String, Value>,
-) -> Value {
+/// The `device` block of Deskhand's own document.
+fn main_device_block(topics: &Topics, device: &DeviceInfo) -> Value {
     let mut dev = json!({
         "identifiers": [topics.device_id()],
         "name": device.name,
@@ -250,15 +252,58 @@ pub fn device_config(
                 .collect::<Vec<_>>()
         );
     }
+    dev
+}
+
+/// The `device` block of a sub-device document, linked to its parent with `via_device`.
+pub fn sub_device_block(topics: &Topics, sub: &SubDevice) -> Value {
+    let mut dev = Map::new();
+    dev.insert(
+        "identifiers".into(),
+        json!([topics.sub_device_id(sub.key.as_str())]),
+    );
+    dev.insert("name".into(), sub.name.clone().into());
+    for (key, value) in [
+        ("manufacturer", &sub.manufacturer),
+        ("model", &sub.model),
+        ("model_id", &sub.model_id),
+        ("serial_number", &sub.serial_number),
+        ("sw_version", &sub.sw_version),
+        ("hw_version", &sub.hw_version),
+    ] {
+        insert_opt(&mut dev, key, value.clone().map(Value::from));
+    }
+    let via = match &sub.via {
+        Some(parent) => topics.sub_device_id(parent.as_str()),
+        None => topics.device_id(),
+    };
+    dev.insert("via_device".into(), via.into());
+    Value::Object(dev)
+}
+
+fn document(device_block: Value, sw_version: &str, components: &BTreeMap<String, Value>) -> Value {
     json!({
-        "device": dev,
+        "device": device_block,
         "origin": {
             "name": "Deskhand",
-            "sw_version": device.sw_version,
+            "sw_version": sw_version,
             "support_url": ORIGIN_URL,
         },
         "components": components,
     })
+}
+
+/// The whole document of Deskhand's own device.
+pub fn device_config(
+    topics: &Topics,
+    device: &DeviceInfo,
+    components: &BTreeMap<String, Value>,
+) -> Value {
+    document(
+        main_device_block(topics, device),
+        &device.sw_version,
+        components,
+    )
 }
 
 /// Key in the compat media player document naming its owner capability
@@ -323,36 +368,43 @@ pub fn media_player_config(topics: &Topics, device: &DeviceInfo, desc: &EntityDe
 }
 
 /// Result of rendering: publish `first` now and, if set, `followup` about a
-/// second later (once HA has processed the removal stubs).
+/// second later (once HA has processed the removal stubs). The top-level
+/// fields are Deskhand's own document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rendered {
     pub first: Value,
     pub followup: Option<Value>,
     pub removed: Vec<String>,
+    /// Sub-device documents, in key order. Publish them after `first`, so an
+    /// entity that moved to a sub-device is removed from its old document first.
+    pub sub_devices: Vec<RenderedSub>,
 }
 
-/// Tracks what was published to compute removals and kept components.
+/// One sub-device document.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderedSub {
+    pub key: String,
+    /// `None`: delete the document (an empty retained payload), which removes
+    /// the device and its entities from HA.
+    pub first: Option<Value>,
+    pub followup: Option<Value>,
+    pub removed: Vec<String>,
+}
+
+/// What was published in one discovery document.
 #[derive(Debug, Clone, Default)]
-pub struct DiscoveryPlanner {
-    disabled: BTreeSet<String>,
+struct DocState {
     /// Previously published components kept for capabilities that are not running.
     kept: BTreeMap<String, (Option<String>, Value)>,
     /// id → platform of every component in the last published document.
     last_published: BTreeMap<String, String>,
-    /// A compat media player document is on the broker; its owner capability.
-    media_on_broker: Option<Option<String>>,
+    /// The `device` block last published (sub-devices), so a kept document
+    /// can be republished without its entities running.
+    device: Option<Value>,
 }
 
-impl DiscoveryPlanner {
-    pub fn new(disabled_capabilities: BTreeSet<String>) -> Self {
-        Self {
-            disabled: disabled_capabilities,
-            ..Self::default()
-        }
-    }
-
-    /// Takes over the document a previous run left on the broker.
-    pub fn adopt_previous(&mut self, topics: &Topics, previous: &Value) {
+impl DocState {
+    fn adopt(&mut self, topics: &Topics, disabled: &BTreeSet<String>, previous: &Value) {
         let components = previous
             .get("components")
             .or_else(|| previous.get("cmps"))
@@ -377,11 +429,88 @@ impl DiscoveryPlanner {
             let capability = owner_capability(topics, c);
             if capability
                 .as_ref()
-                .is_some_and(|cap| !self.disabled.contains(cap))
+                .is_some_and(|cap| !disabled.contains(cap))
             {
                 self.kept.insert(id.clone(), (capability, c.clone()));
             }
         }
+        self.device = previous
+            .get("device")
+            .or_else(|| previous.get("dev"))
+            .cloned();
+    }
+
+    /// Adds the kept components to `full` and works out the removals:
+    /// returns the components to publish first (with removal stubs), the
+    /// follow-up without the stubs (if anything was removed), and the removed ids.
+    #[allow(clippy::type_complexity)]
+    fn plan(
+        &mut self,
+        mut full: BTreeMap<String, Value>,
+        live: &BTreeSet<String>,
+    ) -> (
+        BTreeMap<String, Value>,
+        Option<BTreeMap<String, Value>>,
+        Vec<String>,
+    ) {
+        self.kept.retain(|id, (cap, _)| {
+            !full.contains_key(id) && cap.as_ref().is_none_or(|c| !live.contains(c))
+        });
+        for (id, (_, c)) in &self.kept {
+            full.insert(id.clone(), c.clone());
+        }
+        let removed: Vec<String> = self
+            .last_published
+            .keys()
+            .filter(|id| !full.contains_key(*id))
+            .cloned()
+            .collect();
+        let followup = (!removed.is_empty()).then(|| full.clone());
+        let mut first = full.clone();
+        for id in &removed {
+            first.insert(id.clone(), json!({ "platform": self.last_published[id] }));
+        }
+        self.last_published = full
+            .iter()
+            .filter_map(|(id, c)| {
+                c.get("platform")
+                    .and_then(Value::as_str)
+                    .map(|p| (id.clone(), p.to_owned()))
+            })
+            .collect();
+        (first, followup, removed)
+    }
+}
+
+/// Tracks what was published to compute removals and kept components.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryPlanner {
+    disabled: BTreeSet<String>,
+    main: DocState,
+    subs: BTreeMap<String, DocState>,
+    /// A compat media player document is on the broker; its owner capability.
+    media_on_broker: Option<Option<String>>,
+}
+
+impl DiscoveryPlanner {
+    pub fn new(disabled_capabilities: BTreeSet<String>) -> Self {
+        Self {
+            disabled: disabled_capabilities,
+            ..Self::default()
+        }
+    }
+
+    /// Takes over the document a previous run left on the broker.
+    pub fn adopt_previous(&mut self, topics: &Topics, previous: &Value) {
+        self.main.adopt(topics, &self.disabled, previous);
+    }
+
+    /// Takes over a sub-device document a previous run left on the broker.
+    pub fn adopt_previous_sub(&mut self, topics: &Topics, key: &str, previous: &Value) {
+        self.subs
+            .entry(key.to_owned())
+            .or_default()
+            .adopt(topics, &self.disabled, previous);
     }
 
     /// Takes over a compat media player document a previous run left behind.
@@ -424,10 +553,13 @@ impl DiscoveryPlanner {
 
     /// Capabilities whose components are being kept (their status topics should read offline).
     pub fn kept_capabilities(&self) -> BTreeSet<String> {
-        self.kept.values().filter_map(|(c, _)| c.clone()).collect()
+        std::iter::once(&self.main)
+            .chain(self.subs.values())
+            .flat_map(|d| d.kept.values().filter_map(|(c, _)| c.clone()))
+            .collect()
     }
 
-    /// Renders the document for the current entities. `live` holds the
+    /// Renders the documents for the current entities. `live` holds the
     /// capabilities that are running (or have run) in this session.
     pub fn render(
         &mut self,
@@ -436,51 +568,81 @@ impl DiscoveryPlanner {
         entities: &[EntityDescriptor],
         live: &BTreeSet<String>,
     ) -> Rendered {
-        let mut full: BTreeMap<String, Value> = BTreeMap::new();
-        full.insert(
+        let mut main: BTreeMap<String, Value> = BTreeMap::new();
+        main.insert(
             CONNECTED_ID.to_owned(),
             Value::Object(connected_component(topics)),
         );
+        let mut subs: BTreeMap<String, (Arc<SubDevice>, BTreeMap<String, Value>)> = BTreeMap::new();
         for desc in entities {
-            if let Some(c) = component(topics, desc) {
-                full.insert(desc.spec.id.to_string(), Value::Object(c));
+            let Some(c) = component(topics, desc) else {
+                continue;
+            };
+            let id = desc.spec.id.to_string();
+            match &desc.spec.device {
+                None => {
+                    main.insert(id, Value::Object(c));
+                }
+                Some(sub) => {
+                    subs.entry(sub.key.to_string())
+                        .or_insert_with(|| (sub.clone(), BTreeMap::new()))
+                        .1
+                        .insert(id, Value::Object(c));
+                }
             }
         }
-        self.kept.retain(|id, (cap, _)| {
-            !full.contains_key(id) && cap.as_ref().is_none_or(|c| !live.contains(c))
-        });
-        for (id, (_, c)) in &self.kept {
-            full.insert(id.clone(), c.clone());
-        }
 
-        let removed: Vec<String> = self
-            .last_published
-            .keys()
-            .filter(|id| !full.contains_key(*id))
-            .cloned()
-            .collect();
-        let followup = if removed.is_empty() {
-            None
-        } else {
-            Some(device_config(topics, device, &full))
-        };
-        let mut first = full.clone();
-        for id in &removed {
-            first.insert(id.clone(), json!({ "platform": self.last_published[id] }));
-        }
-        self.last_published = full
-            .iter()
-            .filter_map(|(id, c)| {
-                c.get("platform")
-                    .and_then(Value::as_str)
-                    .map(|p| (id.clone(), p.to_owned()))
-            })
-            .collect();
-        Rendered {
-            first: device_config(topics, device, &first),
-            followup,
+        let (first, followup, removed) = self.main.plan(main, live);
+        let block = main_device_block(topics, device);
+        let sw = &device.sw_version;
+        let mut rendered = Rendered {
+            first: document(block.clone(), sw, &first),
+            followup: followup.map(|f| document(block, sw, &f)),
             removed,
+            sub_devices: Vec::new(),
+        };
+
+        let keys: BTreeSet<String> = subs.keys().chain(self.subs.keys()).cloned().collect();
+        for key in keys {
+            let (sub, full) = match subs.remove(&key) {
+                Some((sub, full)) => (Some(sub), full),
+                None => (None, BTreeMap::new()),
+            };
+            let state = self.subs.entry(key.clone()).or_default();
+            let was_published = !state.last_published.is_empty();
+            let (first, followup, removed) = state.plan(full, live);
+            if state.last_published.is_empty() {
+                // Nothing left on this device: delete its document.
+                self.subs.remove(&key);
+                if was_published {
+                    rendered.sub_devices.push(RenderedSub {
+                        key,
+                        first: None,
+                        followup: None,
+                        removed,
+                    });
+                }
+                continue;
+            }
+            let block = sub
+                .map(|s| sub_device_block(topics, &s))
+                .or_else(|| state.device.clone())
+                .unwrap_or_else(|| {
+                    json!({
+                        "identifiers": [topics.sub_device_id(&key)],
+                        "name": key,
+                        "via_device": topics.device_id(),
+                    })
+                });
+            state.device = Some(block.clone());
+            rendered.sub_devices.push(RenderedSub {
+                key,
+                first: Some(document(block.clone(), sw, &first)),
+                followup: followup.map(|f| document(block, sw, &f)),
+                removed,
+            });
         }
+        rendered
     }
 }
 
@@ -775,5 +937,162 @@ mod tests {
         let r = planner.render(&t, &device(), &[], &BTreeSet::new());
         assert_eq!(r.removed, vec!["gone"]);
         assert!(r.first["components"].get("x").is_some(), "kept");
+    }
+
+    fn keyboard(via: Option<&'static str>) -> Arc<SubDevice> {
+        Arc::new(SubDevice {
+            manufacturer: Some("Logitech".into()),
+            model: Some("MX Keys S".into()),
+            model_id: Some("B378".into()),
+            serial_number: Some("1234AB567CD8".into()),
+            sw_version: Some("RBK 81.03.B0018".into()),
+            via: via.map(EntityId::from_static),
+            ..SubDevice::new(id("mx_keys_s"), "MX Keys S")
+        })
+    }
+
+    fn sub_doc<'a>(r: &'a Rendered, key: &str) -> &'a RenderedSub {
+        r.sub_devices.iter().find(|s| s.key == key).unwrap()
+    }
+
+    #[test]
+    fn sub_device_document_snapshot() {
+        let receiver = Arc::new(SubDevice {
+            manufacturer: Some("Logitech".into()),
+            model: Some("Logi Bolt receiver".into()),
+            ..SubDevice::new(id("bolt_receiver"), "Logi Bolt receiver")
+        });
+        let entities = vec![
+            desc(
+                "peripheral_battery",
+                EntitySpec::sensor(id("battery_mx_keys_s"), "Battery")
+                    .sensor_class(SensorClass::Battery)
+                    .unit("%")
+                    .on_device(keyboard(Some("bolt_receiver"))),
+            ),
+            desc(
+                "peripheral_battery",
+                EntitySpec::sensor(id("bolt_receiver_paired"), "Paired devices")
+                    .diagnostic()
+                    .on_device(receiver),
+            ),
+            desc("metrics", EntitySpec::sensor(id("cpu_percent"), "CPU")),
+        ];
+        let live = BTreeSet::from(["peripheral_battery".to_owned(), "metrics".to_owned()]);
+        let r = DiscoveryPlanner::default().render(&topics(), &device(), &entities, &live);
+        assert_eq!(
+            component_ids(&r.first),
+            vec!["cpu_percent", CONNECTED_ID],
+            "sub-device entities stay out of the main document"
+        );
+        let keys: Vec<&str> = r.sub_devices.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(keys, ["bolt_receiver", "mx_keys_s"]);
+        let receiver_doc = sub_doc(&r, "bolt_receiver").first.as_ref().unwrap();
+        assert_eq!(receiver_doc["device"]["via_device"], "deskhand_abc123");
+        insta::assert_json_snapshot!(sub_doc(&r, "mx_keys_s").first.as_ref().unwrap());
+    }
+
+    #[test]
+    fn entity_moving_to_a_sub_device_leaves_a_stub_behind() {
+        let t = topics();
+        let live = BTreeSet::from(["peripheral_battery".to_owned()]);
+        let on_main = desc(
+            "peripheral_battery",
+            EntitySpec::sensor(id("battery_mx_keys_s"), "MX Keys S battery"),
+        );
+        let mut planner = DiscoveryPlanner::default();
+        planner.render(&t, &device(), std::slice::from_ref(&on_main), &live);
+
+        let moved = desc(
+            "peripheral_battery",
+            EntitySpec::sensor(id("battery_mx_keys_s"), "Battery").on_device(keyboard(None)),
+        );
+        let r = planner.render(&t, &device(), &[moved], &live);
+        assert_eq!(r.removed, vec!["battery_mx_keys_s"]);
+        assert_eq!(
+            r.first["components"]["battery_mx_keys_s"],
+            json!({"platform": "sensor"})
+        );
+        let sub = sub_doc(&r, "mx_keys_s");
+        assert!(sub.removed.is_empty());
+        let doc = sub.first.as_ref().unwrap();
+        assert_eq!(component_ids(doc), vec!["battery_mx_keys_s"]);
+        assert_eq!(
+            doc["components"]["battery_mx_keys_s"]["unique_id"],
+            "deskhand_abc123_battery_mx_keys_s",
+            "same unique id as before the move"
+        );
+        assert_eq!(doc["device"]["via_device"], "deskhand_abc123");
+    }
+
+    #[test]
+    fn empty_sub_device_document_is_deleted() {
+        let t = topics();
+        let live = BTreeSet::from(["peripheral_battery".to_owned()]);
+        let kb = keyboard(None);
+        let battery = desc(
+            "peripheral_battery",
+            EntitySpec::sensor(id("battery_mx_keys_s"), "Battery").on_device(kb.clone()),
+        );
+        let connected = desc(
+            "peripheral_battery",
+            EntitySpec::binary_sensor(id("battery_mx_keys_s_connected"), "Connected", None)
+                .on_device(kb),
+        );
+        let mut planner = DiscoveryPlanner::default();
+        planner.render(&t, &device(), &[battery.clone(), connected], &live);
+
+        // One entity goes: stub, then the document without it.
+        let r = planner.render(&t, &device(), std::slice::from_ref(&battery), &live);
+        let sub = sub_doc(&r, "mx_keys_s");
+        assert_eq!(sub.removed, vec!["battery_mx_keys_s_connected"]);
+        assert_eq!(
+            component_ids(sub.followup.as_ref().unwrap()),
+            vec!["battery_mx_keys_s"]
+        );
+
+        // The last one goes: the whole document is deleted, once.
+        let r = planner.render(&t, &device(), &[], &live);
+        let sub = sub_doc(&r, "mx_keys_s");
+        assert!(sub.first.is_none());
+        assert_eq!(sub.removed, vec!["battery_mx_keys_s"]);
+        let r = planner.render(&t, &device(), &[], &live);
+        assert!(r.sub_devices.is_empty());
+    }
+
+    #[test]
+    fn previous_run_sub_devices_are_kept_or_deleted() {
+        let t = topics();
+        let battery = desc(
+            "peripheral_battery",
+            EntitySpec::sensor(id("battery_mx_keys_s"), "Battery").on_device(keyboard(None)),
+        );
+        let live = BTreeSet::from(["peripheral_battery".to_owned()]);
+        let previous = DiscoveryPlanner::default()
+            .render(&t, &device(), &[battery], &live)
+            .sub_devices[0]
+            .first
+            .clone()
+            .unwrap();
+
+        // Enabled but not running yet: kept as it was, device block included.
+        let mut planner = DiscoveryPlanner::default();
+        planner.adopt_previous_sub(&t, "mx_keys_s", &previous);
+        let r = planner.render(&t, &device(), &[], &BTreeSet::new());
+        let sub = sub_doc(&r, "mx_keys_s");
+        assert_eq!(sub.first.as_ref(), Some(&previous));
+        assert_eq!(
+            planner.kept_capabilities(),
+            BTreeSet::from(["peripheral_battery".to_owned()])
+        );
+        // It runs and the keyboard is gone: deleted.
+        let r = planner.render(&t, &device(), &[], &live);
+        assert!(sub_doc(&r, "mx_keys_s").first.is_none());
+
+        // Disabled: deleted right away.
+        let mut planner = DiscoveryPlanner::new(BTreeSet::from(["peripheral_battery".to_owned()]));
+        planner.adopt_previous_sub(&t, "mx_keys_s", &previous);
+        let r = planner.render(&t, &device(), &[], &BTreeSet::new());
+        assert!(sub_doc(&r, "mx_keys_s").first.is_none());
     }
 }

@@ -267,7 +267,8 @@ struct Session {
     /// The previous run's document has been read (or found absent).
     adopted: bool,
     awaiting_retained: Option<Instant>,
-    followup: Option<(Instant, Value)>,
+    /// Documents (topic, payload) to republish without their removal stubs.
+    followup: Option<(Instant, Vec<(String, Value)>)>,
     birth_at: Option<Instant>,
 
     entities: Vec<EntityDescriptor>,
@@ -390,7 +391,9 @@ impl Session {
                 if self.adopted {
                     self.report(TransportEvent::Connected);
                 } else {
-                    // Before the device document, so its retained copy arrives first.
+                    // Before the device document, so their retained copies arrive
+                    // first: the device document ends the retained read.
+                    self.subscribe(self.topics.sub_device_filter());
                     self.subscribe(self.topics.media_player_config());
                     self.subscribe(self.topics.device_config());
                     self.awaiting_retained =
@@ -428,6 +431,19 @@ impl Session {
                 && let Ok(previous) = serde_json::from_slice::<Value>(payload)
             {
                 self.planner.adopt_previous_media(&previous);
+            }
+            return;
+        }
+        if let Some(key) = self.topics.sub_device_key(topic) {
+            if self.awaiting_retained.is_some() && !payload.is_empty() {
+                match serde_json::from_slice::<Value>(payload) {
+                    Ok(previous) => self
+                        .planner
+                        .adopt_previous_sub(&self.topics, key, &previous),
+                    Err(e) => {
+                        tracing::warn!(error = %e, %topic, "ignoring unparsable previous discovery document")
+                    }
+                }
             }
             return;
         }
@@ -496,6 +512,7 @@ impl Session {
         for topic in [
             self.topics.device_config(),
             self.topics.media_player_config(),
+            self.topics.sub_device_filter(),
         ] {
             if let Err(e) = self.client.try_unsubscribe(topic) {
                 tracing::debug!(error = %e, "unsubscribe failed");
@@ -510,16 +527,13 @@ impl Session {
             self.finish_retained_read();
         }
         if self.followup.as_ref().is_some_and(|(t, _)| *t <= now)
-            && let Some((_, doc)) = self.followup.take()
+            && let Some((_, docs)) = self.followup.take()
             && self.connected
             && !self.paused
         {
-            self.publish(
-                self.topics.device_config(),
-                doc.to_string(),
-                true,
-                QoS::AtLeastOnce,
-            );
+            for (topic, doc) in docs {
+                self.publish(topic, doc.to_string(), true, QoS::AtLeastOnce);
+            }
         }
         if self.birth_at.is_some_and(|t| t <= now) {
             self.birth_at = None;
@@ -562,9 +576,31 @@ impl Session {
             true,
             QoS::AtLeastOnce,
         );
-        self.followup = rendered
+        let mut followups: Vec<(String, Value)> = rendered
             .followup
-            .map(|doc| (Instant::now() + self.timings.stub_delay, doc));
+            .map(|doc| (self.topics.device_config(), doc))
+            .into_iter()
+            .collect();
+        // After the main document, so an entity that moved to a sub-device is
+        // removed from its old document before HA sees it in the new one.
+        for sub in rendered.sub_devices {
+            let topic = self.topics.sub_device_config(&sub.key);
+            match sub.first {
+                Some(doc) => {
+                    if !sub.removed.is_empty() {
+                        tracing::info!(device = %sub.key, removed = ?sub.removed, "removing stale entities from Home Assistant");
+                    }
+                    self.publish(topic.clone(), doc.to_string(), true, QoS::AtLeastOnce);
+                    followups.extend(sub.followup.map(|doc| (topic, doc)));
+                }
+                None => {
+                    tracing::info!(device = %sub.key, "removing device from Home Assistant");
+                    self.publish(topic, Vec::new(), true, QoS::AtLeastOnce);
+                }
+            }
+        }
+        self.followup =
+            (!followups.is_empty()).then(|| (Instant::now() + self.timings.stub_delay, followups));
         if let Some(doc) =
             self.planner
                 .render_media(&self.topics, &self.device, &self.entities, &live)

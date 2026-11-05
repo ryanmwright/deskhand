@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use deskhand_core::entity::ImageSource;
 use deskhand_core::{
-    Ctx, DeviceInfo, EntityId, EntitySpec, Hub, HubHandle, HubOptions, IntegrationConfig, Transport,
+    Ctx, DeviceInfo, EntityId, EntitySpec, Hub, HubHandle, HubOptions, IntegrationConfig,
+    SubDevice, Transport,
 };
 use deskhand_mqtt::{AdminClient, MqttConfig, MqttTimings, MqttTransport, Topics};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
@@ -391,6 +392,58 @@ async fn stale_entities_are_removed_across_restarts() {
 }
 
 #[tokio::test]
+async fn sub_devices_get_their_own_documents_and_are_removed() {
+    require_it!();
+    let (_broker, port) = broker().await;
+    let t = topics();
+    let sub_topic = t.sub_device_config("kbd");
+    let kbd = std::sync::Arc::new(SubDevice {
+        model: Some("Keyboard".into()),
+        ..SubDevice::new(id("kbd"), "Keyboard")
+    });
+
+    // First run: one entity on the main device, one on a sub-device.
+    let d = Daemon::start(port, &[]);
+    let _main = d.ctx.sensor(EntitySpec::sensor(id("test_main"), "Main"));
+    let _kbd = d
+        .ctx
+        .sensor(EntitySpec::sensor(id("test_kbd_battery"), "Battery").on_device(kbd));
+    d.ready();
+    let mut obs = Observer::connect(port, "homeassistant/#").await;
+    // The main document goes first, then the sub-device's.
+    let main = obs
+        .wait_for(&t.device_config(), |m| {
+            components(&m.json()).contains("test_main")
+        })
+        .await;
+    assert!(!components(&main.json()).contains("test_kbd_battery"));
+    let doc = obs
+        .wait_for(&sub_topic, |m| !m.payload.is_empty())
+        .await
+        .json();
+    assert_eq!(
+        components(&doc),
+        BTreeSet::from(["test_kbd_battery".into()])
+    );
+    assert_eq!(doc["device"]["via_device"], "deskhand_itnode");
+    let mut late = Observer::connect(port, &t.sub_device_filter()).await;
+    assert!(late.wait_for(&sub_topic, |_| true).await.retain);
+    d.shutdown().await;
+
+    // Second run: the sub-device is gone, so its retained document is deleted.
+    let d = Daemon::start(port, &[]);
+    let _main = d.ctx.sensor(EntitySpec::sensor(id("test_main"), "Main"));
+    d.ready();
+    obs.wait_for(&sub_topic, |m| m.payload.is_empty()).await;
+    let mut late = Observer::connect(port, &t.sub_device_filter()).await;
+    assert!(
+        late.collect(Duration::from_millis(500)).await.is_empty(),
+        "no retained sub-device document left"
+    );
+    d.shutdown().await;
+}
+
+#[tokio::test]
 async fn disabled_capabilities_are_removed_and_missing_ones_kept() {
     require_it!();
     let (_broker, port) = broker().await;
@@ -535,6 +588,10 @@ async fn admin_reads_and_clears_everything_retained() {
 
     let d = Daemon::start(port, &[]);
     let cpu = d.ctx.sensor(EntitySpec::sensor(id("cpu_percent"), "CPU"));
+    let _kbd = d.ctx.sensor(
+        EntitySpec::sensor(id("kbd_battery"), "Battery")
+            .on_device(std::sync::Arc::new(SubDevice::new(id("kbd"), "Keyboard"))),
+    );
     cpu.set(1);
     cpu.set_attributes(serde_json::Map::from_iter([("k".into(), "v".into())]));
     d.ready();
@@ -567,6 +624,7 @@ async fn admin_reads_and_clears_everything_retained() {
         .unwrap();
     assert_eq!(retained[&t.status()], "online");
     assert!(retained.contains_key(&t.device_config()));
+    assert!(retained.contains_key(&t.sub_device_config("kbd")));
     assert!(retained.contains_key(&t.attributes(&id("cpu_percent"))));
     admin.disconnect().await;
     d.shutdown().await;

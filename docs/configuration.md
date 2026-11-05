@@ -127,6 +127,7 @@ The other options, by capability:
 | `media` | `compat_mqtt_media_player` | `false` | Also publish a media player entity for the HACS [mqtt_media_player](https://github.com/bkbilly/mqtt_media_player) integration ([home-assistant.md](home-assistant.md#a-media-player-card)). |
 | `audio` | `mic_ignore_apps` | `[]` | More apps whose recordings don't count as "microphone in use" (volume meters like pavucontrol are already ignored). |
 | `camera` | `ignore_processes` | `[]` | Processes whose camera use doesn't count. |
+| `peripheral_battery` | `sources` | all `"auto"` | Per source, `"auto"`, `true` or `false`: `[integrations.peripheral_battery.sources]` with `upower = false` turns off UPower's peripheral batteries. |
 | `bluetooth` | `devices` | `"paired"` | `"paired"`, or a list of addresses (`["AA:BB:CC:DD:EE:FF"]`), for the per-device connect switches. |
 | `systemd` | `units` | `[]` | systemd **user** units Home Assistant may start and stop, by full name. Only these. |
 | `metrics` | `interval` | `"30s"` | |

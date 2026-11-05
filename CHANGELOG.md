@@ -5,6 +5,30 @@ All notable changes to Deskhand. The format follows
 [Semantic Versioning](https://semver.org/). The release workflow uses the
 section of the tagged version as the release notes.
 
+## [Unreleased]
+
+### Changed
+
+- **Peripheral batteries are devices of their own.** A keyboard, mouse or
+  headset battery now shows up in Home Assistant as its own device (with its
+  model, serial number and firmware), linked to the computer, instead of a
+  sensor on the computer's device. The entity ids (`battery_<model>`) stay the
+  same, and Home Assistant keeps the entity id and history when the entity
+  moves to its new device (checked against Home Assistant 2026.10). The
+  entities now belong to the new `peripheral_battery` capability (availability
+  topic `status/peripheral_battery`); `battery` keeps the laptop battery and AC
+  power. `enabled = false` under `[integrations.battery]` no longer hides
+  peripheral batteries; use `[integrations.peripheral_battery]`.
+
+### Added
+
+- Per peripheral: `battery_<model>_state`, `_low`, `_connected` and
+  `_updated` (time of the last reading). A sleeping peripheral keeps its last
+  battery value; only `connected` turns off.
+- Sub-devices in MQTT discovery: one retained document per device at
+  `homeassistant/device/deskhand_<node>/<key>/config`, removed again when the
+  device goes. `deskhand uninstall` clears them too.
+
 ## [0.1.1] - 2026-11-01
 
 The first release: KDE Plasma 6 on Linux, with the generic Linux integrations

@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::IntegrationConfig;
-use crate::entity::{Attributes, CommandValue, EntityId, State};
+use crate::entity::{Attributes, CommandValue, EntityId, EntitySpec, State};
 use crate::hub::{Hub, HubOptions};
 use crate::integration::Integration;
 use crate::transport::{HubEvent, TransportEvent, TransportLink};
@@ -81,6 +81,8 @@ pub struct TestRig {
     events: Vec<(EntityId, String, Attributes)>,
     /// Entity ids of the latest snapshot or discovery update.
     pub entities: Vec<EntityId>,
+    /// Specs of the latest snapshot or discovery update.
+    pub specs: HashMap<EntityId, EntitySpec>,
 }
 
 impl TestRig {
@@ -94,9 +96,18 @@ impl TestRig {
                 self.states.extend(s.states.clone());
                 self.attrs.extend(s.attributes.clone());
                 self.entities = s.entities.iter().map(|d| d.spec.id.clone()).collect();
+                self.specs = s
+                    .entities
+                    .iter()
+                    .map(|d| (d.spec.id.clone(), d.spec.clone()))
+                    .collect();
             }
             HubEvent::Discovery { entities, .. } => {
                 self.entities = entities.iter().map(|d| d.spec.id.clone()).collect();
+                self.specs = entities
+                    .iter()
+                    .map(|d| (d.spec.id.clone(), d.spec.clone()))
+                    .collect();
             }
             HubEvent::State { id, state, .. } => {
                 self.states.insert(id.clone(), state.clone());
@@ -189,6 +200,7 @@ pub fn rig_with(
         attrs: HashMap::new(),
         events: Vec::new(),
         entities: Vec::new(),
+        specs: HashMap::new(),
     };
     (rig, cancel)
 }
@@ -206,6 +218,17 @@ pub async fn wait_attr(r: &mut TestRig, id: &EntityId, key: &str, want: serde_js
         r.attrs.get(id).and_then(|a| a.get(key)) == Some(&want)
     })
     .await;
+}
+
+/// Waits until the published spec of `id` satisfies `pred`.
+pub async fn wait_spec(
+    r: &mut TestRig,
+    id: &EntityId,
+    what: &str,
+    pred: impl Fn(&EntitySpec) -> bool,
+) {
+    let what = format!("{id}: {what}");
+    r.until(&what, |r| r.specs.get(id).is_some_and(&pred)).await;
 }
 
 /// Waits until the published entity set does (or doesn't) contain `id`.

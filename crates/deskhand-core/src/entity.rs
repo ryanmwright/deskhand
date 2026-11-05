@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -253,6 +254,41 @@ pub enum AvailabilityScope {
     Always,
 }
 
+/// A device of its own in Home Assistant (a keyboard, a mouse, a receiver),
+/// linked to Deskhand's device with `via`. Entities name theirs with
+/// [`EntitySpec::on_device`]; a sub-device exists while it has entities.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubDevice {
+    /// Stable key, unique within this Deskhand device.
+    pub key: EntityId,
+    pub name: String,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub model_id: Option<String>,
+    pub serial_number: Option<String>,
+    pub sw_version: Option<String>,
+    pub hw_version: Option<String>,
+    /// The sub-device this one is connected through (a receiver);
+    /// `None` is Deskhand's own device.
+    pub via: Option<EntityId>,
+}
+
+impl SubDevice {
+    pub fn new(key: EntityId, name: impl Into<String>) -> Self {
+        Self {
+            key,
+            name: name.into(),
+            manufacturer: None,
+            model: None,
+            model_id: None,
+            serial_number: None,
+            sw_version: None,
+            hw_version: None,
+            via: None,
+        }
+    }
+}
+
 /// The kind of entity, mapping 1:1 onto a Home Assistant entity platform.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -367,6 +403,8 @@ pub struct EntitySpec {
     pub retain: bool,
     /// Minimum time between two published state updates; extra updates are coalesced.
     pub min_interval: Option<Duration>,
+    /// The sub-device this entity belongs to; `None` is Deskhand's own device.
+    pub device: Option<Arc<SubDevice>>,
 }
 
 impl EntitySpec {
@@ -382,6 +420,7 @@ impl EntitySpec {
             availability: AvailabilityScope::Integration,
             retain,
             min_interval: None,
+            device: None,
         }
     }
 
@@ -495,6 +534,12 @@ impl EntitySpec {
 
     pub fn min_interval(mut self, interval: Duration) -> Self {
         self.min_interval = Some(interval);
+        self
+    }
+
+    /// Puts this entity on a sub-device instead of Deskhand's own device.
+    pub fn on_device(mut self, device: Arc<SubDevice>) -> Self {
+        self.device = Some(device);
         self
     }
 

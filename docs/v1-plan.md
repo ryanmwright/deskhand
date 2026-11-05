@@ -1142,38 +1142,66 @@ M15.
     needed for that.
 
 #### M17: Sub-devices and the generic peripheral model
-- [ ] Core sub-devices.
+- [x] Core sub-devices.
       - `ctx.device(DeviceSpec) -> DeviceHandle`, with
         `DeviceSpec { key, name, manufacturer, model, model_id, serial_number, sw_version, hw_version, via }`.
       - `EntitySpec::on_device(&handle)`; entities default to the main device.
       - Updates re-render discovery through the 1 s debounce.
       - A device without entities or handles is removed after the 30 s grace period.
       - Generic: nothing Logitech-specific.
-- [ ] MQTT.
+- [x] MQTT.
       - One retained document per device at `homeassistant/device/deskhand_<node>_<key>/config`,
         with `via_device` and the main device's availability topics.
       - Stale cleanup reads the retained `deskhand_<node>_*` documents and clears the ones that
         are gone.
       - `uninstall` and `print-discovery` cover sub-devices.
       - insta snapshots and a broker test for stale-device removal.
-- [ ] `deskhand-common/src/peripherals.rs`.
+- [x] `deskhand-common/src/peripherals.rs`.
       - `PeripheralSource` (`id`, `probe`, `run(sink)`) and `PeripheralSink`. The sink takes
         readings and removals and lets a source register extra entities for a peripheral it owns.
       - Merging, devices and entities, and the `PeripheralBattery` integration.
       - Probe: available if any source is.
       - Per-source backoff (1 s → 60 s), re-probing on resume and every 5 min.
       - `ready()` after the first report from each source, or after 5 s.
-- [ ] Config: `[integrations.peripheral_battery] upower = "auto"; hidpp = "auto"; controls = []`.
-- [ ] Split `UPowerPeripherals` out of `upower.rs`, filling `State`, `BatteryLevel`/`WarningLevel`,
+- [x] Config: `[integrations.peripheral_battery] upower = "auto"; hidpp = "auto"; controls = []`.
+- [x] Split `UPowerPeripherals` out of `upower.rs`, filling `State`, `BatteryLevel`/`WarningLevel`,
       `IsPresent` and `UpdateTime`. Split the existing mock test, keeping the
       `battery_mx_master_3` assertion.
-- [ ] Merge tests on paused time:
+- [x] Merge tests on paused time:
       - One entity when both sources report a device, with HID++ preferred.
       - When HID++ stops, UPower takes over.
       - Each source works alone.
       - The laptop `battery` capability is unaffected.
-- [ ] Check in the dev HA whether moving `battery_<model>` to a sub-device keeps its entity ID and
+- [x] Check in the dev HA whether moving `battery_<model>` to a sub-device keeps its entity ID and
       history. CHANGELOG: per-peripheral devices and the new `status/peripheral_battery` topic.
+- **Status:** done (2026-11-04). Deviations from the items above:
+  - **No device handle.** A sub-device is a `SubDevice` value on `EntitySpec::device`
+    (`EntitySpec::on_device(Arc<SubDevice>)`). A device exists while it has entities, so the
+    entity grace period covers it. Changed device info (firmware, a receiver link) is published
+    by registering the entities again with the new `SubDevice`. New handles come first, so the
+    generation check turns this into an update, not a removal.
+  - **Topic:** sub-device documents use HA's optional node level,
+    `homeassistant/device/deskhand_<node>/<key>/config`, so a single subscription
+    (`homeassistant/device/deskhand_<node>/+/config`) reads exactly ours. Its retained copies are
+    read before the main document, which ends the retained read. Unique IDs are unchanged
+    (`deskhand_<node>_<entity>`). The main document is published first, so a moved entity is
+    removed (stub) before it appears in its new document. A sub-device document with nothing
+    left is deleted (empty retained payload), which removes the device from HA.
+  - **Config:** sources go in a table, `[integrations.peripheral_battery.sources]`
+    (`upower = false`). `controls` and the sink's extra entities come with their first user
+    (backlight, M19).
+  - **Merging:** each source's key is `slug(model)`, else the serial, else the device path (the
+    0.1.x rule), so ids are unchanged; a matching serial joins two keys. The winner is the first
+    source in priority order whose reading says connected, else the first. The others fill
+    missing identity fields.
+  - **Tests:** the merge tests run on real time, because the per-source backoff sleeps; a run
+    takes about 3 s.
+  - **HA check** (dev HA 2026.10.4, simulated with mosquitto_pub): an entity moved from the main
+    document into a sub-device document keeps its entity ID (HA restores the ID of a re-added
+    unique ID) and its history. It now sits on the new device, with a brief unavailable gap.
+  - This host has no UPower running. `doctor` shows `peripheral_battery` unavailable with the
+    source's reason, and `print-discovery` is unchanged without sub-devices. Real peripherals are
+    checked on the KDE host in M19.
 
 #### M18: HID++ source
 - [ ] `crates/deskhand-hidpp` (platform-neutral) wrapping `hidpp` in one adapter module.
@@ -1295,6 +1323,7 @@ M15.
 | 2026-11-04 | Planning | M16–M19 planned with the user: Logitech HID++ peripheral batteries (MX Keys S on Bolt is invisible to the kernel and UPower). Generic `peripheral_battery` integration merging UPower and HID++ sources, per-peripheral HA devices (accepted one-time move of `battery_<model>`), `openlogi-hidpp` (0BSD) for the protocol (needs Rust 1.99), backlight the only opt-in control |
 | 2026-11-04 | M16 (part) | Toolchain moved to Rust 1.99 (`nixpkgs-rust` input for the devShell and crane); `openlogi-hidpp =0.9.0` pinned. `deskhand_linux::hidraw` (sysfs enumeration, `RawHidChannel` with poll and plain read/write, no unsafe) and `hidpp_probe` (receiver, pairings, features, identity, battery, backlight, 120 s event watch, hex capture). Tested over a socketpair against `HidppChannel`. CI uploads the probe with a udev rule. Waiting for the run on the KDE host (`docs/dev/spikes.md` §9) |
 | 2026-11-04 | M16 | Two probe runs on the KDE host (Fedora 44). Bolt on `hid-generic` confirmed; identity, 0x1004 and 0x1982 work through `openlogi-hidpp` with events; sleep is a 0x41 link-down after ~10 min, and wake brings 0x41 + 0x1d4b + an unasked battery report, so no polling (`battery_refresh` off). Solaar's udev rules give access; Solaar shares the node (software-ID matching). Captures saved as fixtures with decoding tests. Probe now skips kernel-owned nodes, logs only HID++ and logs node changes |
+| 2026-11-04 | M17 | Sub-devices: `SubDevice` on `EntitySpec`, one retained MQTT document per device under `homeassistant/device/deskhand_<node>/<key>/config` (adopted, kept, stubbed and deleted like the main one; uninstall and print-discovery cover them). `peripherals.rs` in common: sources, sink, merge by key or serial, five entities per peripheral on its own device, receivers as devices, per-source supervision and config. UPower peripherals are now a source (same `battery_<model>` ids) with state, low, connected and updated. Dev HA keeps entity ids and history when an entity moves to a sub-device. New snapshot, 4 planner tests, broker test, 6 merge tests, UPower mock test |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

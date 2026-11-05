@@ -54,6 +54,9 @@ pub fn candidates(
         Box::new(idle::IdleScreenSaver::new(env.clone(), idle_threshold)),
         Box::new(idle::IdleLogind::new(env.clone())),
         Box::new(upower::Battery::new(env.clone())),
+        Box::new(deskhand_common::PeripheralBattery::new(vec![Arc::new(
+            upower::UPowerPeripherals::new(env.clone()),
+        )])),
         Box::new(upower::PowerProfile::new(env.clone())),
         Box::new(network::Network::new(env.clone())),
         Box::new(bluetooth::Bluetooth::new(env.clone())),

@@ -7,6 +7,7 @@
 //! <prefix>/<node>/<entity>/attributes     retained
 //! <prefix>/<node>/<entity>/set            commands, never retained
 //! <discovery>/device/deskhand_<node>/config
+//! <discovery>/device/deskhand_<node>/<key>/config   one per sub-device (a keyboard, a receiver)
 //! ```
 
 use deskhand_core::EntityId;
@@ -112,6 +113,39 @@ impl Topics {
         )
     }
 
+    /// HA device identifier of a sub-device: `deskhand_<node>_<key>`.
+    pub fn sub_device_id(&self, key: &str) -> String {
+        format!("deskhand_{}_{key}", self.node_id)
+    }
+
+    /// Discovery topic of a sub-device. HA's optional node level keeps all of
+    /// them under one wildcard ([`Self::sub_device_filter`]).
+    pub fn sub_device_config(&self, key: &str) -> String {
+        format!(
+            "{}/device/{}/{key}/config",
+            self.discovery_prefix,
+            self.device_id()
+        )
+    }
+
+    /// Subscription filter for every sub-device document of ours.
+    pub fn sub_device_filter(&self) -> String {
+        format!(
+            "{}/device/{}/+/config",
+            self.discovery_prefix,
+            self.device_id()
+        )
+    }
+
+    /// The sub-device key a sub-device discovery topic names.
+    pub fn sub_device_key<'a>(&self, topic: &'a str) -> Option<&'a str> {
+        let prefix = format!("{}/device/{}/", self.discovery_prefix, self.device_id());
+        topic
+            .strip_prefix(&prefix)?
+            .strip_suffix("/config")
+            .filter(|k| !k.is_empty() && !k.contains('/'))
+    }
+
     /// Discovery topic of the compat `media_player` entity (HACS `mqtt_media_player`).
     pub fn media_player_config(&self) -> String {
         format!(
@@ -150,6 +184,24 @@ mod tests {
             "homeassistant/device/deskhand_abc123/config"
         );
         assert_eq!(t.ha_status(), "homeassistant/status");
+        assert_eq!(
+            t.sub_device_config("mx_keys_s"),
+            "homeassistant/device/deskhand_abc123/mx_keys_s/config"
+        );
+        assert_eq!(t.sub_device_id("mx_keys_s"), "deskhand_abc123_mx_keys_s");
+        assert_eq!(
+            t.sub_device_filter(),
+            "homeassistant/device/deskhand_abc123/+/config"
+        );
+        assert_eq!(
+            t.sub_device_key("homeassistant/device/deskhand_abc123/mx_keys_s/config"),
+            Some("mx_keys_s")
+        );
+        assert_eq!(t.sub_device_key(&t.device_config()), None);
+        assert_eq!(
+            t.sub_device_key("homeassistant/device/deskhand_other/x/config"),
+            None
+        );
     }
 
     #[test]

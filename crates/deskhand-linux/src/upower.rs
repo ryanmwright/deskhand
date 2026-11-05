@@ -1,19 +1,23 @@
-//! UPower: the laptop battery, AC power and peripheral batteries (`battery`
-//! capability), and power-profiles-daemon (`power_profile` capability).
+//! UPower: the laptop battery and AC power (`battery` capability), peripheral
+//! batteries as a source for the `peripheral_battery` integration
+//! ([`UPowerPeripherals`]), and power-profiles-daemon (`power_profile`).
 //!
-//! Peripheral batteries (mouse, keyboard, headset, ...) are dynamic
-//! entities `battery_<model>`: they appear when the device connects and are
-//! removed (after the hub's grace period) when it goes away.
+//! Peripherals (mouse, keyboard, headset, ...) become devices of their own
+//! through `deskhand_common::peripherals`, keyed by model name as before
+//! (`battery_<model>`).
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use deskhand_common::peripherals::{
+    BatteryLevel, ChargeState, PeripheralReading, PeripheralSink, PeripheralSource,
+};
 use deskhand_core::ctx::{BinarySensor, Sensor};
 use deskhand_core::entity::{BinarySensorClass, SensorClass, StateClass};
-use deskhand_core::{Attributes, Ctx, EntityId, EntitySpec, Integration, IntegrationError, Probe};
+use deskhand_core::{Ctx, EntityId, EntitySpec, Integration, IntegrationError, Probe};
 use futures_util::StreamExt;
-use serde_json::json;
+use tokio_util::sync::CancellationToken;
 use zbus::Proxy;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -64,16 +68,6 @@ fn kind_name(kind: u32) -> &'static str {
     }
 }
 
-/// A peripheral battery as read from UPower.
-#[derive(Debug, Clone, PartialEq)]
-struct Peripheral {
-    id: EntityId,
-    name: String,
-    percentage: f64,
-    kind: &'static str,
-    state: &'static str,
-}
-
 /// The laptop battery (UPower's display device).
 #[derive(Debug, Clone, PartialEq)]
 struct Laptop {
@@ -103,31 +97,81 @@ fn laptop_from(props: &Props) -> Option<Laptop> {
     })
 }
 
-fn peripheral_from(path: &str, props: &Props) -> Option<Peripheral> {
+fn charge_state(code: u32) -> ChargeState {
+    match code {
+        1 => ChargeState::Charging,
+        2 => ChargeState::Discharging,
+        3 => ChargeState::Empty,
+        4 => ChargeState::Full,
+        5 => ChargeState::PendingCharge,
+        6 => ChargeState::PendingDischarge,
+        _ => ChargeState::Unknown,
+    }
+}
+
+/// UPower's `BatteryLevel`, for devices that only report coarse levels.
+fn battery_level(code: u32) -> Option<BatteryLevel> {
+    match code {
+        3 => Some(BatteryLevel::Low),
+        4 => Some(BatteryLevel::Critical),
+        6 | 7 => Some(BatteryLevel::Normal),
+        8 => Some(BatteryLevel::Full),
+        _ => None,
+    }
+}
+
+/// A peripheral battery (not a power supply) as a [`PeripheralReading`].
+fn peripheral_from(path: &str, props: &Props) -> Option<PeripheralReading> {
     let kind: u32 = prop(props, "Type").unwrap_or(0);
     let power_supply: bool = prop(props, "PowerSupply").unwrap_or(true);
     let present: bool = prop(props, "IsPresent").unwrap_or(true);
     if power_supply || kind <= 2 || !present {
         return None;
     }
-    let model: String = prop(props, "Model").unwrap_or_default();
-    let serial: String = prop(props, "Serial").unwrap_or_default();
-    let key = [model.as_str(), serial.as_str()]
-        .into_iter()
-        .find(|s| !s.trim().is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or("device").to_owned());
-    let name = if model.trim().is_empty() {
-        format!("{} battery", kind_name(kind).replace('_', " "))
-    } else {
-        format!("{} battery", model.trim())
+    let text = |name| {
+        prop::<String>(props, name)
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
     };
-    Some(Peripheral {
-        id: EntityId::from_static("battery").join(&key),
-        name,
-        percentage: prop(props, "Percentage").unwrap_or(0.0),
-        kind: kind_name(kind),
-        state: state_name(prop(props, "State").unwrap_or(0)),
+    let model = text("Model");
+    let serial = text("Serial");
+    let last_segment = path.rsplit('/').next().unwrap_or("device");
+    let key = PeripheralReading::key_for(
+        model.as_deref().unwrap_or(""),
+        serial.as_deref().unwrap_or(""),
+        last_segment,
+    );
+    let kind = kind_name(kind);
+    let name = model.clone().unwrap_or_else(|| {
+        let mut n = kind.replace('_', " ");
+        if let Some(first) = n.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        n
+    });
+    let level = battery_level(prop(props, "BatteryLevel").unwrap_or(0));
+    let low = match prop::<u32>(props, "WarningLevel").unwrap_or(0) {
+        1 | 2 => Some(false),
+        3..=5 => Some(true),
+        _ => None,
+    };
+    let read_at = prop::<u64>(props, "UpdateTime")
+        .filter(|t| *t > 0)
+        .map(|t| UNIX_EPOCH + Duration::from_secs(t));
+    Some(PeripheralReading {
+        kind: Some(kind.to_owned()),
+        manufacturer: text("Vendor"),
+        model,
+        serial,
+        percentage: prop(props, "Percentage"),
+        // A level-only device: UPower's percentage is derived from the level.
+        estimated: level.is_some(),
+        level,
+        state: charge_state(prop(props, "State").unwrap_or(0)),
+        low,
+        connected: true,
+        read_at: read_at.or_else(|| Some(SystemTime::now())),
+        ..PeripheralReading::new(key, name)
     })
 }
 
@@ -176,7 +220,7 @@ impl LaptopEntities {
     }
 }
 
-/// Laptop battery, AC power and peripheral batteries via UPower.
+/// Laptop battery and AC power via UPower.
 #[derive(Debug)]
 pub struct Battery {
     env: Arc<LinuxEnv>,
@@ -191,7 +235,6 @@ impl Battery {
 struct Snapshot {
     laptop: Option<Laptop>,
     on_battery: bool,
-    peripherals: Vec<Peripheral>,
 }
 
 async fn read(conn: &zbus::Connection, manager: &Proxy<'_>) -> zbus::Result<Snapshot> {
@@ -202,6 +245,13 @@ async fn read(conn: &zbus::Connection, manager: &Proxy<'_>) -> zbus::Result<Snap
         "OnBattery",
     )
     .unwrap_or(false);
+    Ok(Snapshot { laptop, on_battery })
+}
+
+async fn read_peripherals(
+    conn: &zbus::Connection,
+    manager: &Proxy<'_>,
+) -> zbus::Result<Vec<PeripheralReading>> {
     let paths: Vec<OwnedObjectPath> = manager.call("EnumerateDevices", &()).await?;
     let mut peripherals = Vec::new();
     for p in paths {
@@ -212,11 +262,15 @@ async fn read(conn: &zbus::Connection, manager: &Proxy<'_>) -> zbus::Result<Snap
             peripherals.push(per);
         }
     }
-    Ok(Snapshot {
-        laptop,
-        on_battery,
-        peripherals,
-    })
+    Ok(peripherals)
+}
+
+async fn probe_upower(env: &LinuxEnv) -> Probe {
+    match env.system_bus().await {
+        Ok(c) if LinuxEnv::has_owner(&c, UPOWER).await => Probe::available(),
+        Ok(_) => Probe::unavailable("UPower is not running"),
+        Err(e) => Probe::unavailable(format!("system bus: {e}")),
+    }
 }
 
 #[async_trait::async_trait]
@@ -230,15 +284,11 @@ impl Integration for Battery {
     }
 
     fn description(&self) -> &'static str {
-        "Battery, AC power and peripheral batteries through UPower"
+        "Battery and AC power through UPower"
     }
 
     async fn probe(&self) -> Probe {
-        match self.env.system_bus().await {
-            Ok(c) if LinuxEnv::has_owner(&c, UPOWER).await => Probe::available(),
-            Ok(_) => Probe::unavailable("UPower is not running"),
-            Err(e) => Probe::unavailable(format!("system bus: {e}")),
-        }
+        probe_upower(&self.env).await
     }
 
     async fn run(&self, ctx: Ctx) -> Result<(), IntegrationError> {
@@ -252,32 +302,12 @@ impl Integration for Battery {
             .laptop
             .as_ref()
             .map(|_| LaptopEntities::register(&ctx));
-        let mut peripherals: BTreeMap<EntityId, Sensor> = BTreeMap::new();
-        let apply = |snap: &Snapshot, peripherals: &mut BTreeMap<EntityId, Sensor>| {
+        let apply = |snap: &Snapshot| {
             if let (Some(e), Some(l)) = (&laptop, &snap.laptop) {
                 e.publish(l, snap.on_battery);
             }
-            let wanted: Vec<&EntityId> = snap.peripherals.iter().map(|p| &p.id).collect();
-            peripherals.retain(|id, _| wanted.contains(&id));
-            for p in &snap.peripherals {
-                let sensor = peripherals.entry(p.id.clone()).or_insert_with(|| {
-                    tracing::info!(id = %p.id, "peripheral battery appeared");
-                    ctx.sensor(
-                        EntitySpec::sensor(p.id.clone(), p.name.clone())
-                            .sensor_class(SensorClass::Battery)
-                            .unit("%")
-                            .state_class(StateClass::Measurement)
-                            .precision(0),
-                    )
-                });
-                let mut attrs = Attributes::new();
-                attrs.insert("kind".into(), json!(p.kind));
-                attrs.insert("state".into(), json!(p.state));
-                sensor.set_attributes(attrs);
-                sensor.set(p.percentage.round());
-            }
         };
-        apply(&first, &mut peripherals);
+        apply(&first);
         ctx.ready();
 
         let cancel = ctx.cancelled();
@@ -289,7 +319,75 @@ impl Integration for Battery {
                         return Err(IntegrationError::msg("service restarted or went away"));
                     }
                     match read(&conn, &manager).await {
-                        Ok(snap) => apply(&snap, &mut peripherals),
+                        Ok(snap) => apply(&snap),
+                        Err(e) => tracing::debug!(error = %e, "UPower read failed"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- peripheral batteries -----------------------------------------------------
+
+/// Peripheral batteries from UPower (the kernel's `power_supply` devices,
+/// Bluetooth battery reports, ...), as a `peripheral_battery` source.
+#[derive(Debug)]
+pub struct UPowerPeripherals {
+    env: Arc<LinuxEnv>,
+}
+
+impl UPowerPeripherals {
+    pub fn new(env: Arc<LinuxEnv>) -> Self {
+        Self { env }
+    }
+}
+
+#[async_trait::async_trait]
+impl PeripheralSource for UPowerPeripherals {
+    fn id(&self) -> &'static str {
+        "upower"
+    }
+
+    async fn probe(&self) -> Probe {
+        probe_upower(&self.env).await
+    }
+
+    async fn run(
+        &self,
+        sink: PeripheralSink,
+        cancel: CancellationToken,
+    ) -> Result<(), IntegrationError> {
+        let conn = self.env.system_bus().await.map_err(dbus_err)?;
+        let mut signals = signals_from(&conn, UPOWER).await.map_err(dbus_err)?;
+        let manager = Proxy::new(&conn, UPOWER, UPOWER_PATH, UPOWER)
+            .await
+            .map_err(dbus_err)?;
+        let mut known: BTreeSet<EntityId> = BTreeSet::new();
+        let report = |list: Vec<PeripheralReading>, known: &mut BTreeSet<EntityId>| {
+            let now: BTreeSet<EntityId> = list.iter().map(|r| r.key.clone()).collect();
+            for gone in known.difference(&now) {
+                sink.remove(gone);
+            }
+            for r in list {
+                sink.update(r);
+            }
+            *known = now;
+        };
+        report(
+            read_peripherals(&conn, &manager).await.map_err(dbus_err)?,
+            &mut known,
+        );
+        sink.ready();
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => return Ok(()),
+                c = changed(&mut signals, QUIET) => {
+                    if c.is_none() {
+                        return Err(IntegrationError::msg("service restarted or went away"));
+                    }
+                    match read_peripherals(&conn, &manager).await {
+                        Ok(list) => report(list, &mut known),
                         Err(e) => tracing::debug!(error = %e, "UPower read failed"),
                     }
                 }
@@ -412,7 +510,7 @@ mod tests {
     use crate::testutil::{rig, wait_entity, wait_state};
 
     #[tokio::test]
-    async fn laptop_battery_and_dynamic_peripherals() {
+    async fn laptop_battery_and_ac_power() {
         require_dbus!();
         let bus = TestBus::start().unwrap();
         let upower = MockUPower::start(&bus, UPowerDevice::default())
@@ -431,19 +529,59 @@ mod tests {
             .await
             .unwrap();
         wait_state(&mut t, &BATTERY_LEVEL, State::Float(42.0)).await;
+    }
+
+    #[tokio::test]
+    async fn peripherals_become_devices_with_the_same_entity_ids() {
+        use deskhand_common::peripherals::{CAPABILITY, PeripheralBattery};
+        use deskhand_core::testing::{wait_attr, wait_spec};
+        require_dbus!();
+        let bus = TestBus::start().unwrap();
+        let upower = MockUPower::start(&bus, UPowerDevice::default())
+            .await
+            .unwrap();
+        let env = LinuxEnv::with_addresses(bus.session_address(), bus.system_address(), &[]);
+        let source: Arc<dyn PeripheralSource> = Arc::new(UPowerPeripherals::new(env));
+        let (mut t, _cancel) = rig(PeripheralBattery::new(vec![source]), CAPABILITY);
 
         let mouse = UPowerDevice {
             kind: device_type::MOUSE,
             power_supply: false,
             percentage: 77.0,
             model: "MX Master 3".into(),
+            vendor: "Logitech".into(),
+            serial: "4071-ab-cd".into(),
+            state: 1,
+            warning_level: 1,
+            update_time: 1_793_000_000,
             ..UPowerDevice::default()
         };
         upower.add_device("mouse_hidpp_1", mouse).await.unwrap();
+        // The entity id is unchanged from 0.1.x; it now sits on its own device.
         let id = EntityId::new("battery_mx_master_3").unwrap();
         wait_state(&mut t, &id, State::Float(77.0)).await;
+        wait_attr(&mut t, &id, "kind", serde_json::json!("mouse")).await;
+        wait_attr(&mut t, &id, "state", serde_json::json!("charging")).await;
+        let low = EntityId::new("battery_mx_master_3_low").unwrap();
+        wait_state(&mut t, &low, State::Bool(false)).await;
+        let updated = EntityId::new("battery_mx_master_3_updated").unwrap();
+        wait_state(&mut t, &updated, "2026-10-26T07:33:20+00:00".into()).await;
+        wait_spec(&mut t, &id, "on the mouse's device", |s| {
+            s.device.as_ref().is_some_and(|d| {
+                d.name == "MX Master 3"
+                    && d.manufacturer.as_deref() == Some("Logitech")
+                    && d.serial_number.as_deref() == Some("4071-ab-cd")
+            })
+        })
+        .await;
 
-        // Removing it drops the entity (removed after the hub's grace period).
+        upower
+            .update("mouse_hidpp_1", |d| d.warning_level = 3)
+            .await
+            .unwrap();
+        wait_state(&mut t, &low, State::Bool(true)).await;
+
+        // Removing it drops the device (after the hub's grace period).
         upower.remove_device("mouse_hidpp_1").await.unwrap();
         wait_entity(&mut t, &id, false).await;
     }

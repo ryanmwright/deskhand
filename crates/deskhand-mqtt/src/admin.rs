@@ -122,6 +122,7 @@ impl AdminClient {
     pub fn owned_filters(&self) -> Vec<String> {
         vec![
             self.topics.device_config(),
+            self.topics.sub_device_filter(),
             self.topics.media_player_config(),
             self.topics.base_filter(),
         ]

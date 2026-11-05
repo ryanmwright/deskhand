@@ -37,9 +37,29 @@ unavailable except `session_state` and `deskhand_connected`, which keep showing
 | `logout` | button | KDE, opt-in (`"logout"` in `power.buttons`): ends the session without asking. |
 | `on_ac_power` | binary sensor | |
 | `battery_level`, `battery_state`, `battery_time_remaining` | sensors | Laptops (UPower). Time in minutes. |
-| `battery_<model>` | sensors | Batteries of mice, keyboards, headsets; appear while connected. Attributes `kind`, `state`. |
 | `power_profile` | select | power-profiles-daemon: `power-saver`, `balanced`, `performance`. |
 | `gamemode_active` | binary sensor | Feral GameMode is active. |
+
+## Peripheral batteries
+
+Keyboards, mice, headsets and other battery devices, from UPower (the kernel's
+battery reports, Bluetooth) and later Logitech receivers. **Each peripheral is
+its own Home Assistant device**, linked to the computer (or to its receiver),
+with its model, serial number and firmware in the device info. `<key>` is the
+model name as a slug, for example `mx_master_3`. A device that two sources see
+is one device.
+
+| Id | Type | |
+|---|---|---|
+| `battery_<key>` | sensor (%) | Attributes `kind`, `state`, `source` (and `level`, `estimated`, `slot`, `encrypted` where known). |
+| `battery_<key>_state` | sensor | `charging`, `discharging`, `full`, `empty`, `pending_charge`, `pending_discharge`, `error` or `unknown`. |
+| `battery_<key>_low` | binary sensor | The device's own warning, else 15 % or less. |
+| `battery_<key>_connected` | binary sensor | Off while the peripheral sleeps or is out of range; the battery keeps its last value. |
+| `battery_<key>_updated` | timestamp (diagnostic) | When the battery was last read. |
+| `<receiver>_paired` | sensor (diagnostic) | On a receiver's device: how many devices are paired; attribute `slots`. |
+
+A peripheral's device and entities go away when it is no longer reported (for
+example unpaired or unplugged), not while it sleeps.
 
 ## Media
 

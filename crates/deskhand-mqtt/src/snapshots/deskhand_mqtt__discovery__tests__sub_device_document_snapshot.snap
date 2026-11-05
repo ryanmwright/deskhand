@@ -1,0 +1,45 @@
+---
+source: crates/deskhand-mqtt/src/discovery.rs
+expression: "sub_doc(&r, \"mx_keys_s\").first.as_ref().unwrap()"
+---
+{
+  "components": {
+    "battery_mx_keys_s": {
+      "availability": [
+        {
+          "topic": "deskhand/abc123/status"
+        },
+        {
+          "topic": "deskhand/abc123/status/peripheral_battery"
+        }
+      ],
+      "availability_mode": "all",
+      "device_class": "battery",
+      "json_attributes_topic": "deskhand/abc123/battery_mx_keys_s/attributes",
+      "name": "Battery",
+      "payload_available": "online",
+      "payload_not_available": "offline",
+      "platform": "sensor",
+      "state_topic": "deskhand/abc123/battery_mx_keys_s/state",
+      "unique_id": "deskhand_abc123_battery_mx_keys_s",
+      "unit_of_measurement": "%"
+    }
+  },
+  "device": {
+    "identifiers": [
+      "deskhand_abc123_mx_keys_s"
+    ],
+    "manufacturer": "Logitech",
+    "model": "MX Keys S",
+    "model_id": "B378",
+    "name": "MX Keys S",
+    "serial_number": "1234AB567CD8",
+    "sw_version": "RBK 81.03.B0018",
+    "via_device": "deskhand_abc123_bolt_receiver"
+  },
+  "origin": {
+    "name": "Deskhand",
+    "support_url": "https://github.com/ryanmwright/deskhand",
+    "sw_version": "0.0.0-test"
+  }
+}

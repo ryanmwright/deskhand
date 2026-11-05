@@ -42,6 +42,13 @@ pub struct UPowerDevice {
     pub power_supply: bool,
     pub model: String,
     pub serial: String,
+    pub vendor: String,
+    /// 0 unknown, 1 none (percentage only), 3 low, 4 critical, 6 normal, 7 high, 8 full.
+    pub battery_level: u32,
+    /// 1 none, 2 discharging, 3 low, 4 critical, 5 action.
+    pub warning_level: u32,
+    /// Unix seconds of the last refresh.
+    pub update_time: u64,
 }
 
 impl Default for UPowerDevice {
@@ -56,6 +63,10 @@ impl Default for UPowerDevice {
             power_supply: true,
             model: String::new(),
             serial: String::new(),
+            vendor: String::new(),
+            battery_level: 1,
+            warning_level: 1,
+            update_time: 0,
         }
     }
 }
@@ -151,6 +162,22 @@ impl UPowerDeviceObj {
     #[zbus(property)]
     async fn serial(&self) -> String {
         self.get().serial
+    }
+    #[zbus(property)]
+    async fn vendor(&self) -> String {
+        self.get().vendor
+    }
+    #[zbus(property)]
+    async fn battery_level(&self) -> u32 {
+        self.get().battery_level
+    }
+    #[zbus(property)]
+    async fn warning_level(&self) -> u32 {
+        self.get().warning_level
+    }
+    #[zbus(property)]
+    async fn update_time(&self) -> u64 {
+        self.get().update_time
     }
     #[zbus(property)]
     async fn native_path(&self) -> String {

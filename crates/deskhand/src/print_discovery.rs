@@ -1,6 +1,7 @@
 //! `deskhand print-discovery [--all]`: runs the integrations without a
-//! broker and prints the discovery document the daemon would publish
-//! (`--all`: every topic and payload, including states).
+//! broker and prints the discovery document the daemon would publish. With
+//! sub-devices (peripherals), it prints each document under its topic.
+//! `--all`: every topic and payload, including states.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -79,11 +80,19 @@ fn render(
 ) -> Value {
     let live = snap.availability.keys().map(|c| c.to_string()).collect();
     let rendered = DiscoveryPlanner::default().render(topics, device, &snap.entities, &live);
-    if !all {
+    if !all && rendered.sub_devices.is_empty() {
         return rendered.first;
     }
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
     out.insert(topics.device_config(), rendered.first);
+    for sub in rendered.sub_devices {
+        if let Some(doc) = sub.first {
+            out.insert(topics.sub_device_config(&sub.key), doc);
+        }
+    }
+    if !all {
+        return serde_json::to_value(out).unwrap_or_default();
+    }
     out.insert(topics.status(), ONLINE.into());
     for (cap, available) in &snap.availability {
         let status = if *available { ONLINE } else { OFFLINE };
