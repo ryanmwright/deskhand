@@ -1337,8 +1337,8 @@ M15.
     4..8; Unifying `0xB5 0x30+(n-1)` bytes 1..5, as the kernel does) and reports it in
     `alt_serials`; the kit joins on serials and alternative ids across sources only. A joined
     device takes the key of the latest source in the list (UPower: the 0.1.x id stays) and never
-    goes back to an earlier source's key, whatever order the sources report in. To check on the
-    host after the update: one G305 device, `sensor.homepc_logitech_g305_battery`.
+    goes back to an earlier source's key, whatever order the sources report in. Checked on the
+    host (2026-11-05): one G305 device again, so the Lightspeed receiver answers the unit-id read.
   Deviations:
   - **Mode select.** Setting a level switches the keyboard to permanent manual mode (the only
     mode where a level holds, as in Solaar), so a `_backlight_mode` select (`automatic`,
