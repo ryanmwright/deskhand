@@ -1339,6 +1339,16 @@ M15.
     device takes the key of the latest source in the list (UPower: the 0.1.x id stays) and never
     goes back to an earlier source's key, whatever order the sources report in. Checked on the
     host (2026-11-05): one G305 device again, so the Lightspeed receiver answers the unit-id read.
+  - **Found on the host: backlight entities removed at every start.** The receiver reported ready
+    before the awake keyboard was read, so the first discovery had no backlight entities and stale
+    cleanup removed them, until the read re-added them. A receiver is now ready once its awake
+    devices are read (within the 4.5 s wait, inside the hub's 5 s barrier). A keyboard asleep at
+    start still gets its backlight entities only on its first wake (the levels are unknown
+    until then).
+  - **Sleep not seen on the host:** in 40 minutes untouched (cable out) the receiver sent no
+    link-down for the MX Keys S, while the G305 on the Unifying receiver went offline and back.
+    In M16 the same keyboard dropped its link after ~10 minutes. Being checked with the probe
+    (something polling it? the backlight settings changed during the check?).
   Deviations:
   - **Mode select.** Setting a level switches the keyboard to permanent manual mode (the only
     mode where a level holds, as in Solaar), so a `_backlight_mode` select (`automatic`,

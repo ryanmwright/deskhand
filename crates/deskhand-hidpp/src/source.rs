@@ -19,8 +19,10 @@ use crate::receiver::{ReceiverTask, Timing};
 
 /// A node that failed to open is tried again after this (or on hotplug).
 const REOPEN: Duration = Duration::from_secs(30);
-/// How long the first report waits for the receivers' start-up.
-const READY_WAIT: Duration = Duration::from_secs(4);
+/// How long the first report waits for the receivers' start-up and the
+/// awake devices' first read (the first request can take 1.4 s, M16).
+/// Within the hub's 5 s startup barrier.
+const READY_WAIT: Duration = Duration::from_millis(4500);
 
 /// The nodes Deskhand talks to: Logitech, HID++, and not owned by a kernel
 /// driver that reports the battery itself.

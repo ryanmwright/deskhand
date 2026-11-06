@@ -209,7 +209,14 @@ impl ReceiverTask {
             devices = state.slots.len(),
             "HID++ receiver ready"
         );
-        let _ = ready.send(());
+        // Ready once the awake devices are read too, so the first discovery
+        // has their entities (the backlight's would otherwise be removed as
+        // stale and come back moments later).
+        let mut ready = Some(ready);
+        let settled = |state: &State| !state.slots.values().any(|s| s.busy);
+        if settled(&state) {
+            let _ = ready.take().map(|r| r.send(()));
+        }
 
         let refresh = state.timing.refresh.or(state.sink.battery_refresh());
         let mut tick = refresh.map(|every| tokio::time::interval_at(Instant::now() + every, every));
@@ -234,6 +241,9 @@ impl ReceiverTask {
             }
             if !state.link.is_connected() {
                 break Err(AdapterError::Gone);
+            }
+            if ready.is_some() && settled(&state) {
+                let _ = ready.take().map(|r| r.send(()));
             }
         };
         state.jobs.abort_all();

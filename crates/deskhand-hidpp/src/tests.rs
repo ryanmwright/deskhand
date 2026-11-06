@@ -727,3 +727,14 @@ async fn the_receivers_unit_id_joins_the_kernels_reading() {
         t.entities
     );
 }
+
+#[tokio::test]
+async fn the_first_discovery_has_the_awake_keyboards_backlight() {
+    let (backend, _rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
+    let mut t = start(&backend, CONTROLS);
+    // The first published discovery, not a later update.
+    while t.entities.is_empty() {
+        t.settle(Duration::from_millis(20)).await;
+    }
+    assert!(t.entities.contains(&id(BACKLIGHT)), "{:?}", t.entities);
+}
