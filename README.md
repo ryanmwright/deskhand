@@ -90,7 +90,10 @@ services.deskhand = {
   enable = true;
   passwordFile = "/run/agenix/deskhand-mqtt";  # outside the Nix store
   settings.mqtt = { host = "homeassistant.local"; username = "deskhand"; };
+  # headless = true;  # a server or VM: starts at boot without a login
 };
+# With headless, also in the NixOS configuration:
+# users.users.<you>.linger = true;
 ```
 
 **From source:** Rust 1.99 or newer and libpulse headers (`libpulse-dev`,
