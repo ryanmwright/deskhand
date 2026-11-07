@@ -47,10 +47,13 @@ battery reports, Bluetooth) and from Logitech Bolt and Unifying receivers over
 HID++ ([setup](configuration.md#logitech-receivers)). **Each peripheral is its
 own Home Assistant device**, linked to the computer (or to its receiver), with
 its model, model ID, serial number and firmware in the device info. `<key>` is
-the model name as a slug, for example `mx_master_3` (for a receiver's devices,
-the name the receiver stores, such as `MX KEYS S` → `mx_keys_s`). A device that
-two sources see is one device; HID++ is used while it has a link to the
-device, UPower otherwise.
+the device's serial as a slug, so it stays when the name changes: for a
+Logitech device the unit id that both the kernel and its receiver report
+(`16-fc-6e-8e` → `16_fc_6e_8e`), for a Bluetooth device its address. A device
+without a serial is keyed by its model name (`mx_master_3`). Home Assistant's
+entity ids still come from the device name (`sensor.mx_master_3_battery`). A
+device that two sources see is one device; HID++ is used while it has a link
+to the device, UPower otherwise.
 
 | Id | Type | |
 |---|---|---|

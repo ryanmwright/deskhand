@@ -12,13 +12,22 @@ section of the tagged version as the release notes.
 - **Peripheral batteries are devices of their own.** A keyboard, mouse or
   headset battery now shows up in Home Assistant as its own device (with its
   model, serial number and firmware), linked to the computer, instead of a
-  sensor on the computer's device. The entity ids (`battery_<model>`) stay the
-  same, and Home Assistant keeps the entity id and history when the entity
-  moves to its new device (checked against Home Assistant 2026.10). The
-  entities now belong to the new `peripheral_battery` capability (availability
+  sensor on the computer's device. The entities now belong to the new `peripheral_battery` capability (availability
   topic `status/peripheral_battery`); `battery` keeps the laptop battery and AC
   power. `enabled = false` under `[integrations.battery]` no longer hides
   peripheral batteries; use `[integrations.peripheral_battery]`.
+- **Peripheral ids come from the hardware, not the name** (one-time change).
+  A peripheral is now `battery_<serial>`, for example `battery_16_fc_6e_8e`
+  (the unit id of a Logitech device, the address of a Bluetooth one), and the
+  model name only keys devices without a serial. The name the kernel gives a
+  Logitech device that was asleep when its receiver was set up (`Logitech
+  Wireless Keyboard PID:4075`) used to change once the device woke, giving
+  the same keyboard new entities and leaving orphaned long-term statistics
+  in Home Assistant; that name is no longer used at all. After upgrading,
+  Home Assistant sees each peripheral's entities as new ones (an entity id
+  may get a `_2` suffix while the old entity is still there) and the old
+  entities' statistics are orphaned once: remove them under Developer tools →
+  Statistics.
 
 ### Added
 
@@ -33,15 +42,14 @@ section of the tagged version as the release notes.
   and the Nix package (`lib/udev/rules.d`). `deskhand doctor` lists receivers,
   paired devices and batteries. Cargo feature `hidpp` (default).
 - **Keyboard backlight** (Logitech, opt-in with `controls = ["backlight"]`
-  under `[integrations.peripheral_battery]`): `battery_<model>_backlight`
+  under `[integrations.peripheral_battery]`): `battery_<key>_backlight`
   switch, `_backlight_level`, `_backlight_mode` (automatic or manual) and the
   three fade-out timeouts. Changes made with the keyboard's keys show up right
   away; nothing is sent to a sleeping keyboard.
 - A mouse or keyboard on a receiver the kernel drives (Unifying, Lightspeed)
   is one device, even though UPower and HID++ name it differently: the
-  receiver's unit ID (the kernel's serial) joins them, and the UPower-era
-  entity id stays.
-- Per peripheral: `battery_<model>_state`, `_low`, `_connected` and
+  receiver's unit ID (the kernel's serial) keys it for both.
+- Per peripheral: `battery_<key>_state`, `_low`, `_connected` and
   `_updated` (time of the last reading). A sleeping peripheral keeps its last
   battery value; only `connected` turns off.
 - Sub-devices in MQTT discovery: one retained document per device at

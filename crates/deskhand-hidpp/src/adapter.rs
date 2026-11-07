@@ -513,13 +513,7 @@ impl ReceiverLink {
             .read_long_sub_register(RECEIVER_DEVICE_INDEX, 0xb5, sub, [0, 0])
             .await
             .ok()?;
-        let id = &r[at..at + 4];
-        (id.iter().any(|b| *b != 0)).then(|| {
-            id.iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join("-")
-        })
+        unit_id_text(&r[at..at + 4])
     }
 
     /// Opens the device in `slot`: protocol check, feature lookup, identity
@@ -560,8 +554,21 @@ pub struct Identity {
     pub name: Option<String>,
     /// 0x0003 serial.
     pub serial: Option<String>,
+    /// 0x0003 unit id, formatted like [`ReceiverLink::unit_id`].
+    pub unit_id: Option<String>,
     /// The active application firmware ("RBK 81.03.B0018").
     pub firmware: Option<String>,
+}
+
+/// A unit id as the Linux kernel reports it as the serial (`16-fc-6e-8e`);
+/// `None` if unset (all zero).
+fn unit_id_text(id: &[u8]) -> Option<String> {
+    id.iter().any(|b| *b != 0).then(|| {
+        id.iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join("-")
+    })
 }
 
 /// What a device event means.
@@ -763,6 +770,7 @@ impl DeviceLink {
         if let Some((index, _)) = info {
             let f = dev.add_feature::<DeviceInformationFeature>(index);
             if let Ok(i) = f.get_device_info().await {
+                identity.unit_id = unit_id_text(&i.unit_id);
                 if i.capabilities.serial_number {
                     identity.serial = f
                         .get_serial_number()

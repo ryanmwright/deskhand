@@ -30,13 +30,18 @@
 //! Commands go to the source that reported the backlight, and only while the
 //! peripheral is connected (a sleeping keyboard can't be reached).
 //!
-//! `<key>` is the slug of the model name (else the serial), the same rule
-//! for every source, so a device seen by two sources is one device. If the
-//! names differ, a matching serial (or another id a source knows the device
-//! by, such as a receiver's unit id) joins them. Sources earlier in the list
-//! win while their reading says connected. A joined device keeps the key of
-//! the latest source in the list that reported it (UPower's, so ids from
-//! 0.1.x stay), and never goes back to an earlier source's key.
+//! `<key>` is the slug of the device's hardware id: its serial (a Bluetooth
+//! address; for a Logitech receiver's devices the unit id, which the Linux
+//! kernel reports as the serial), the same rule for every source, so a
+//! device seen by two sources is one device and keeps its ids when its name
+//! changes. Only a device without one is keyed by its model name, and never
+//! by a placeholder such as the kernel's `Logitech Wireless Keyboard
+//! PID:4075` for a device that was asleep when it was set up
+//! ([`is_placeholder_name`]). If the keys still differ, a matching serial
+//! (or another id a source knows the device by) joins them. Sources earlier
+//! in the list win while their reading says connected. A joined device
+//! keeps the key of the latest source in the list that reported it, and
+//! never goes back to an earlier source's key.
 //!
 //! A sleeping or disconnected peripheral keeps its entities and last values;
 //! only `connected` turns off. Entities go when no source reports the device
@@ -321,10 +326,16 @@ impl PeripheralReading {
         }
     }
 
-    /// The key every source uses: the model name, else the serial, else
-    /// `fallback` (a device path), slugified.
-    pub fn key_for(model: &str, serial: &str, fallback: &str) -> EntityId {
-        let text = [model, serial]
+    /// The key every source uses: the hardware id (serial), else the model
+    /// name unless it is a placeholder, else `fallback` (a device path),
+    /// slugified.
+    pub fn key_for(serial: &str, model: &str, fallback: &str) -> EntityId {
+        let model = if is_placeholder_name(model) {
+            ""
+        } else {
+            model
+        };
+        let text = [serial, model]
             .into_iter()
             .map(str::trim)
             .find(|s| !s.is_empty())
@@ -351,6 +362,16 @@ impl PeripheralReading {
             })
             .or_else(|| self.percentage.map(|p| p <= LOW_PERCENT))
     }
+}
+
+/// A name made up for a device whose own name could not be read, such as
+/// the Linux kernel's `Logitech Wireless Keyboard PID:4075` (or `Logitech
+/// Unifying Device. Wireless PID:4075`) for a device that was asleep when
+/// its receiver set it up. It changes once the device is reachable.
+pub fn is_placeholder_name(name: &str) -> bool {
+    name.trim()
+        .rsplit_once("PID:")
+        .is_some_and(|(_, pid)| pid.len() == 4 && pid.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// A receiver (Logi Bolt, Unifying, ...) and what is paired to it.
@@ -1128,6 +1149,12 @@ impl Kit {
         ranked.sort_by_key(|(s, r)| (!r.connected, self.rank(s)));
         let (source, winner) = ranked.first()?;
         let mut m = (*winner).clone();
+        // A source that knows the model also knows a better name.
+        if m.model.is_none()
+            && let Some((_, named)) = ranked[1..].iter().find(|(_, r)| r.model.is_some())
+        {
+            m.name.clone_from(&named.name);
+        }
         for (_, other) in &ranked[1..] {
             fill(&mut m.kind, &other.kind);
             fill(&mut m.manufacturer, &other.manufacturer);
@@ -1502,6 +1529,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_source_without_the_model_takes_the_name_of_one_with_it() {
+        let (hidpp, hid_tx) = source("hidpp");
+        let (upower, up_tx) = source("upower");
+        let mut t = start("", vec![hidpp, upower]);
+        let key = PeripheralReading::key_for("11-22-33-44", "", "");
+        // HID++ knows the name but the keyboard sleeps; UPower (connected)
+        // only has the kernel's stand-in name, so no model.
+        hid_tx
+            .send(FakeMsg::Update(PeripheralReading {
+                key: key.clone(),
+                connected: false,
+                ..keyboard(80.0)
+            }))
+            .unwrap();
+        up_tx
+            .send(FakeMsg::Update(PeripheralReading {
+                model: None,
+                ..PeripheralReading::new(key, "Keyboard")
+            }))
+            .unwrap();
+        let battery = id("battery_11_22_33_44");
+        wait_attr(&mut t, &battery, "source", json!("upower")).await;
+        wait_spec(&mut t, &battery, "HID++'s name", |s| {
+            s.device
+                .as_ref()
+                .is_some_and(|d| d.name == "MX Keys S" && d.model.as_deref() == Some("MX Keys S"))
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn a_unit_id_joins_and_the_later_source_keeps_its_key() {
         // The G305 on a Lightspeed receiver: the kernel (UPower) calls it
         // "Logitech G305" with the receiver's unit id as serial; HID++ knows
@@ -1707,17 +1765,27 @@ mod tests {
     #[test]
     fn keys_and_low_battery_rules() {
         assert_eq!(
-            PeripheralReading::key_for(" MX Master 3 ", "SER", "/dev/x").as_str(),
-            "mx_master_3"
+            PeripheralReading::key_for(" 16-fc-6e-8e ", "MX Master 3", "/dev/x").as_str(),
+            "16_fc_6e_8e"
         );
         assert_eq!(
-            PeripheralReading::key_for("", "SER-1", "x").as_str(),
-            "ser_1"
+            PeripheralReading::key_for("", " MX Master 3 ", "x").as_str(),
+            "mx_master_3"
         );
         assert_eq!(
             PeripheralReading::key_for("", " ", "hidpp_battery_0").as_str(),
             "hidpp_battery_0"
         );
+        assert_eq!(
+            PeripheralReading::key_for("", "Logitech Wireless Keyboard PID:4075", "kbd_0").as_str(),
+            "kbd_0"
+        );
+        assert!(is_placeholder_name("Logitech Wireless Keyboard PID:4075"));
+        assert!(is_placeholder_name(
+            "Logitech Unifying Device. Wireless PID:400a"
+        ));
+        assert!(!is_placeholder_name("MX Keys S"));
+        assert!(!is_placeholder_name("Mouse PID:12"));
         let mut r = keyboard(50.0);
         assert_eq!(r.is_low(), Some(false));
         r.level = Some(BatteryLevel::Low);

@@ -257,7 +257,7 @@ impl MockReceiver {
             return Vec::new();
         }
         let (fi, fsw, params) = (req[2], req[3], &req[4..]);
-        let data = feature(d, fi, fsw >> 4, params);
+        let data = feature(d, dev, fi, fsw >> 4, params);
         match data {
             Some(data) => {
                 let mut r = vec![0x11, dev, fi, fsw];
@@ -363,7 +363,13 @@ fn register(s: &mut State, req: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// HID++ 2.0 function data of an online device, or `None` (error).
-fn feature(d: &mut MockDevice, index: u8, function: u8, params: &[u8]) -> Option<Vec<u8>> {
+fn feature(
+    d: &mut MockDevice,
+    slot: u8,
+    index: u8,
+    function: u8,
+    params: &[u8],
+) -> Option<Vec<u8>> {
     let features = d.features();
     if index == 0 {
         return match function {
@@ -387,8 +393,23 @@ fn feature(d: &mut MockDevice, index: u8, function: u8, params: &[u8]) -> Option
         (0x0001, 0) => Some(vec![features.len() as u8]),
         (0x0003, 0) => {
             let [hi, lo] = d.wpid.to_be_bytes();
+            // The unit id the receiver has for the slot.
             Some(vec![
-                2, 0x11, 0x22, 0x33, 0x44, 0x00, 0x04, hi, lo, 0, 0, 0, 0, 0x00, 0x01,
+                2,
+                0x11,
+                0x22,
+                0x33,
+                0x43 + slot,
+                0x00,
+                0x04,
+                hi,
+                lo,
+                0,
+                0,
+                0,
+                0,
+                0x00,
+                0x01,
             ])
         }
         (0x0003, 1) => Some(match params[0] {

@@ -556,17 +556,28 @@ impl State {
         }
     }
 
-    /// Reports the device in `slot` once it has a name to key it by.
+    /// Reports the device in `slot` once it has an id to key it by.
     fn report(&mut self, slot: u8) {
         let receiver = self.key.clone();
         let Some(s) = self.slots.get_mut(&slot) else {
             return;
         };
         if s.key.is_none() {
-            // The receiver's codename is there even while the device sleeps,
-            // so it keys the device; the device's own name is the fallback.
-            let name = s.codename.as_deref().or(s.name());
-            s.key = name.map(|n| PeripheralReading::key_for(n, "", ""));
+            // The unit id keys the device, as the kernel's serial keys it in
+            // UPower. The receiver has it even while the device sleeps, the
+            // device itself once read. A device without one is keyed by
+            // name, but only once read: a later run may well find its id.
+            let device = s.device.as_ref().map(|d| &d.identity);
+            let unit_id = s
+                .unit_id
+                .as_deref()
+                .or(device.and_then(|i| i.unit_id.as_deref()));
+            let name = device.and(s.codename.as_deref().or(s.name()));
+            s.key = match (unit_id, name) {
+                (Some(id), _) => Some(PeripheralReading::key_for(id, "", "")),
+                (None, Some(n)) => Some(PeripheralReading::key_for("", n, "")),
+                (None, None) => None,
+            };
         }
         let (Some(key), Some(name)) = (s.key.clone(), s.name()) else {
             return;
@@ -583,7 +594,7 @@ impl State {
             model: Some(name.to_owned()),
             model_id: Some(format!("{:04X}", s.wpid)),
             serial: identity.serial,
-            alt_serials: s.unit_id.iter().cloned().collect(),
+            alt_serials: s.unit_id.iter().chain(&identity.unit_id).cloned().collect(),
             firmware: identity.firmware,
             link: Link {
                 receiver: Some(receiver),

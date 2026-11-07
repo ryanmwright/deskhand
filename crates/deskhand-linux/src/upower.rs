@@ -3,8 +3,8 @@
 //! ([`UPowerPeripherals`]), and power-profiles-daemon (`power_profile`).
 //!
 //! Peripherals (mouse, keyboard, headset, ...) become devices of their own
-//! through `deskhand_common::peripherals`, keyed by model name as before
-//! (`battery_<model>`).
+//! through `deskhand_common::peripherals`, keyed by serial
+//! (`battery_<serial>`), else by model name.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deskhand_common::peripherals::{
     BatteryLevel, ChargeState, PeripheralReading, PeripheralSink, PeripheralSource,
+    is_placeholder_name,
 };
 use deskhand_core::ctx::{BinarySensor, Sensor};
 use deskhand_core::entity::{BinarySensorClass, SensorClass, StateClass};
@@ -133,12 +134,14 @@ fn peripheral_from(path: &str, props: &Props) -> Option<PeripheralReading> {
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty())
     };
-    let model = text("Model");
+    // The kernel's stand-in name for a device that was asleep when it was
+    // set up is no name: it changes once the device wakes.
+    let model = text("Model").filter(|m| !is_placeholder_name(m));
     let serial = text("Serial");
     let last_segment = path.rsplit('/').next().unwrap_or("device");
     let key = PeripheralReading::key_for(
-        model.as_deref().unwrap_or(""),
         serial.as_deref().unwrap_or(""),
+        model.as_deref().unwrap_or(""),
         last_segment,
     );
     let kind = kind_name(kind);
@@ -532,7 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peripherals_become_devices_with_the_same_entity_ids() {
+    async fn peripherals_become_devices_keyed_by_serial() {
         use deskhand_common::peripherals::{CAPABILITY, PeripheralBattery};
         use deskhand_core::testing::{wait_attr, wait_spec};
         require_dbus!();
@@ -544,11 +547,12 @@ mod tests {
         let source: Arc<dyn PeripheralSource> = Arc::new(UPowerPeripherals::new(env));
         let (mut t, _cancel) = rig(PeripheralBattery::new(vec![source]), CAPABILITY);
 
+        // Asleep when the kernel set it up: a stand-in name for now.
         let mouse = UPowerDevice {
             kind: device_type::MOUSE,
             power_supply: false,
             percentage: 77.0,
-            model: "MX Master 3".into(),
+            model: "Logitech Wireless Mouse PID:4071".into(),
             vendor: "Logitech".into(),
             serial: "4071-ab-cd".into(),
             state: 1,
@@ -557,29 +561,45 @@ mod tests {
             ..UPowerDevice::default()
         };
         upower.add_device("mouse_hidpp_1", mouse).await.unwrap();
-        // The entity id is unchanged from 0.1.x; it now sits on its own device.
-        let id = EntityId::new("battery_mx_master_3").unwrap();
+        let id = EntityId::new("battery_4071_ab_cd").unwrap();
         wait_state(&mut t, &id, State::Float(77.0)).await;
         wait_attr(&mut t, &id, "kind", serde_json::json!("mouse")).await;
         wait_attr(&mut t, &id, "state", serde_json::json!("charging")).await;
-        let low = EntityId::new("battery_mx_master_3_low").unwrap();
+        let low = EntityId::new("battery_4071_ab_cd_low").unwrap();
         wait_state(&mut t, &low, State::Bool(false)).await;
-        let updated = EntityId::new("battery_mx_master_3_updated").unwrap();
+        let updated = EntityId::new("battery_4071_ab_cd_updated").unwrap();
         wait_state(&mut t, &updated, "2026-10-26T07:33:20+00:00".into()).await;
         wait_spec(&mut t, &id, "on the mouse's device", |s| {
             s.device.as_ref().is_some_and(|d| {
-                d.name == "MX Master 3"
+                d.name == "Mouse"
+                    && d.model.as_deref() == Some("Mouse")
                     && d.manufacturer.as_deref() == Some("Logitech")
                     && d.serial_number.as_deref() == Some("4071-ab-cd")
             })
         })
         .await;
 
+        // Its real name once it wakes: the same entities, renamed.
         upower
-            .update("mouse_hidpp_1", |d| d.warning_level = 3)
+            .update("mouse_hidpp_1", |d| {
+                d.model = "MX Master 3".into();
+                d.warning_level = 3;
+            })
             .await
             .unwrap();
         wait_state(&mut t, &low, State::Bool(true)).await;
+        wait_spec(&mut t, &id, "the real name", |s| {
+            s.device.as_ref().is_some_and(|d| d.name == "MX Master 3")
+        })
+        .await;
+        assert!(
+            t.entities
+                .iter()
+                .all(|e| !e.as_str().starts_with("battery_")
+                    || e.as_str().starts_with("battery_4071_ab_cd")),
+            "{:?}",
+            t.entities
+        );
 
         // Removing it drops the device (after the hub's grace period).
         upower.remove_device("mouse_hidpp_1").await.unwrap();

@@ -146,7 +146,8 @@ fn id(s: &str) -> EntityId {
     EntityId::slugify(s)
 }
 
-const BATTERY: &str = "battery_mx_keys_s";
+/// The MX Keys S in slot 1, keyed by its unit id (`11-22-33-44`).
+const BATTERY: &str = "battery_11_22_33_44";
 const RECEIVER: &str = "bolt_aaaabbbbcccc0001";
 
 #[tokio::test]
@@ -154,14 +155,19 @@ async fn awake_keyboard_is_a_device_on_the_receiver() {
     let (backend, rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
     let mut t = start(&backend, "");
     wait_state(&mut t, &id(BATTERY), State::Float(100.0)).await;
-    wait_state(&mut t, &id("battery_mx_keys_s_state"), "discharging".into()).await;
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_state"),
+        "discharging".into(),
+    )
+    .await;
+    wait_state(
+        &mut t,
+        &id("battery_11_22_33_44_connected"),
         State::Bool(true),
     )
     .await;
-    wait_state(&mut t, &id("battery_mx_keys_s_low"), State::Bool(false)).await;
+    wait_state(&mut t, &id("battery_11_22_33_44_low"), State::Bool(false)).await;
     wait_attr(&mut t, &id(BATTERY), "source", json!("hidpp")).await;
     wait_attr(&mut t, &id(BATTERY), "slot", json!(1)).await;
     wait_attr(&mut t, &id(BATTERY), "encrypted", json!(true)).await;
@@ -178,7 +184,7 @@ async fn awake_keyboard_is_a_device_on_the_receiver() {
         })
     })
     .await;
-    let updated = t.state(&id("battery_mx_keys_s_updated")).cloned();
+    let updated = t.state(&id("battery_11_22_33_44_updated")).cloned();
     assert!(matches!(updated, Some(State::Text(_))), "{updated:?}");
     let paired = id("bolt_aaaabbbbcccc0001_paired");
     wait_state(&mut t, &paired, State::Int(1)).await;
@@ -214,11 +220,11 @@ async fn sleeping_keyboard_is_not_contacted_and_one_read_on_wake() {
     // Known from the receiver alone: codename, link state; no battery yet.
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(false),
     )
     .await;
-    wait_state(&mut t, &id("battery_mx_keys_s_state"), "unknown".into()).await;
+    wait_state(&mut t, &id("battery_11_22_33_44_state"), "unknown".into()).await;
     t.settle(Duration::from_millis(500)).await;
     assert!(rx.requests_to(1).is_empty(), "asked a sleeping device");
 
@@ -227,7 +233,7 @@ async fn sleeping_keyboard_is_not_contacted_and_one_read_on_wake() {
     wait_state(&mut t, &id(BATTERY), State::Float(100.0)).await;
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(true),
     )
     .await;
@@ -239,7 +245,7 @@ async fn sleeping_keyboard_is_not_contacted_and_one_read_on_wake() {
     rx.set_online(1, false);
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(false),
     )
     .await;
@@ -266,7 +272,7 @@ async fn sleeping_keyboard_is_not_contacted_and_one_read_on_wake() {
     rx.set_online(1, false);
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(false),
     )
     .await;
@@ -296,15 +302,20 @@ async fn battery_changes_arrive_as_events_without_requests() {
     ));
     let (charging, rest) = events.split_at(1);
     rx.inject(&charging[0]);
-    wait_state(&mut t, &id("battery_mx_keys_s_state"), "charging".into()).await;
+    wait_state(&mut t, &id("battery_11_22_33_44_state"), "charging".into()).await;
     for r in rest {
         rx.inject(r);
     }
     // It ends awake after the wake sequence, discharging at 100 %.
-    wait_state(&mut t, &id("battery_mx_keys_s_state"), "discharging".into()).await;
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_state"),
+        "discharging".into(),
+    )
+    .await;
+    wait_state(
+        &mut t,
+        &id("battery_11_22_33_44_connected"),
         State::Bool(true),
     )
     .await;
@@ -328,7 +339,7 @@ async fn receiver_loss_and_return_keeps_one_device() {
     backend.unplug("/dev/hidraw10");
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(false),
     )
     .await;
@@ -352,7 +363,7 @@ async fn receiver_loss_and_return_keeps_one_device() {
     wait_state(&mut t, &id(BATTERY), State::Float(95.0)).await;
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(true),
     )
     .await;
@@ -404,7 +415,7 @@ async fn unpairing_removes_the_device() {
     wait_entity(&mut t, &id(BATTERY), true).await;
     rx.unpair(1);
     wait_entity(&mut t, &id(BATTERY), false).await;
-    wait_entity(&mut t, &id("battery_mx_keys_s_connected"), false).await;
+    wait_entity(&mut t, &id("battery_11_22_33_44_connected"), false).await;
     wait_state(&mut t, &id("bolt_aaaabbbbcccc0001_paired"), State::Int(0)).await;
 }
 
@@ -435,16 +446,10 @@ async fn devices_with_only_0x1000_or_0x1001() {
     };
     let (backend, rx) = one_receiver([(2, mouse), (3, trackball)]);
     let mut t = start(&backend, "");
-    wait_state(&mut t, &id("battery_m720_triathlon"), State::Float(50.0)).await;
-    wait_state(&mut t, &id("battery_mx_ergo"), State::Float(50.0)).await;
-    wait_attr(&mut t, &id("battery_mx_ergo"), "estimated", json!(true)).await;
-    wait_attr(
-        &mut t,
-        &id("battery_m720_triathlon"),
-        "kind",
-        json!("mouse"),
-    )
-    .await;
+    wait_state(&mut t, &id("battery_11_22_33_45"), State::Float(50.0)).await;
+    wait_state(&mut t, &id("battery_11_22_33_46"), State::Float(50.0)).await;
+    wait_attr(&mut t, &id("battery_11_22_33_46"), "estimated", json!(true)).await;
+    wait_attr(&mut t, &id("battery_11_22_33_45"), "kind", json!("mouse")).await;
     // 0x1000 broadcast: recharging at 60 %.
     rx.set_battery(
         2,
@@ -454,13 +459,8 @@ async fn devices_with_only_0x1000_or_0x1001() {
         },
     );
     rx.battery_event(2);
-    wait_state(&mut t, &id("battery_m720_triathlon"), State::Float(60.0)).await;
-    wait_state(
-        &mut t,
-        &id("battery_m720_triathlon_state"),
-        "charging".into(),
-    )
-    .await;
+    wait_state(&mut t, &id("battery_11_22_33_45"), State::Float(60.0)).await;
+    wait_state(&mut t, &id("battery_11_22_33_45_state"), "charging".into()).await;
     // 0x1001 broadcast: critical.
     rx.set_battery(
         3,
@@ -470,7 +470,7 @@ async fn devices_with_only_0x1000_or_0x1001() {
         },
     );
     rx.battery_event(3);
-    wait_state(&mut t, &id("battery_mx_ergo_low"), State::Bool(true)).await;
+    wait_state(&mut t, &id("battery_11_22_33_46_low"), State::Bool(true)).await;
 }
 
 #[tokio::test]
@@ -498,7 +498,7 @@ async fn battery_refresh_reads_only_connected_devices() {
     wait_state(&mut t, &id(BATTERY), State::Float(100.0)).await;
     wait_state(
         &mut t,
-        &id("battery_mx_master_3s_connected"),
+        &id("battery_11_22_33_45_connected"),
         State::Bool(false),
     )
     .await;
@@ -545,10 +545,10 @@ async fn inspect_lists_receivers_and_devices() {
     assert_eq!(r.devices[1].battery, None);
 }
 
-const BACKLIGHT: &str = "battery_mx_keys_s_backlight";
-const LEVEL: &str = "battery_mx_keys_s_backlight_level";
-const MODE: &str = "battery_mx_keys_s_backlight_mode";
-const HANDS_OUT: &str = "battery_mx_keys_s_backlight_timeout_hands_out";
+const BACKLIGHT: &str = "battery_11_22_33_44_backlight";
+const LEVEL: &str = "battery_11_22_33_44_backlight_level";
+const MODE: &str = "battery_11_22_33_44_backlight_mode";
+const HANDS_OUT: &str = "battery_11_22_33_44_backlight_timeout_hands_out";
 const CONTROLS: &str = "[integrations.peripheral_battery]\ncontrols = [\"backlight\"]\n";
 
 /// Whether a 0x1982 lookup (root getFeature) was sent to `slot`.
@@ -584,19 +584,19 @@ async fn backlight_entities_follow_the_keys() {
     wait_state(&mut t, &id(HANDS_OUT), State::Float(15.0)).await;
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_backlight_timeout_hands_in"),
+        &id("battery_11_22_33_44_backlight_timeout_hands_in"),
         State::Float(30.0),
     )
     .await;
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_backlight_timeout_powered"),
+        &id("battery_11_22_33_44_backlight_timeout_powered"),
         State::Float(20.0),
     )
     .await;
     wait_spec(&mut t, &id(LEVEL), "0 to 7, on the keyboard", |s| {
         matches!(s.kind, deskhand_core::entity::EntityKind::Number { min, max, .. } if min == 0.0 && max == 7.0)
-            && s.device.as_ref().is_some_and(|d| d.key.as_str() == "mx_keys_s")
+            && s.device.as_ref().is_some_and(|d| d.key.as_str() == "11_22_33_44")
     })
     .await;
     wait_spec(&mut t, &id(MODE), "config category", |s| {
@@ -659,7 +659,7 @@ async fn backlight_commands_wait_for_an_awake_keyboard() {
     rx.set_online(1, false);
     wait_state(
         &mut t,
-        &id("battery_mx_keys_s_connected"),
+        &id("battery_11_22_33_44_connected"),
         State::Bool(false),
     )
     .await;
@@ -699,13 +699,17 @@ impl PeripheralSource for KernelSource {
 }
 
 #[tokio::test]
-async fn the_receivers_unit_id_joins_the_kernels_reading() {
+async fn the_unit_id_keys_the_device_like_the_kernels_serial() {
+    // Asleep while the kernel set it up: a stand-in name, but the unit id
+    // as the serial, so both sources key it the same.
     let (backend, _rx) = one_receiver([(1, MockDevice::mx_keys_s())]);
     let kernel = KernelSource(PeripheralReading {
-        model: Some("Logitech MX Keys S".into()),
         serial: Some("11-22-33-44".into()),
         percentage: Some(100.0),
-        ..PeripheralReading::new(id("Logitech MX Keys S"), "Logitech MX Keys S")
+        ..PeripheralReading::new(
+            PeripheralReading::key_for("11-22-33-44", "", ""),
+            "Keyboard",
+        )
     });
     let source = HidppSource::new(backend.clone()).with_timing(TIMING);
     let config = Config::from_toml_str("", None)
@@ -717,12 +721,18 @@ async fn the_receivers_unit_id_joins_the_kernels_reading() {
         config,
     )
     .0;
-    let joined = id("battery_logitech_mx_keys_s");
-    wait_attr(&mut t, &joined, "source", json!("hidpp")).await;
-    wait_attr(&mut t, &joined, "slot", json!(1)).await;
+    wait_attr(&mut t, &id(BATTERY), "source", json!("hidpp")).await;
+    wait_attr(&mut t, &id(BATTERY), "slot", json!(1)).await;
+    wait_spec(&mut t, &id(BATTERY), "HID++'s name", |s| {
+        s.device.as_ref().is_some_and(|d| d.name == "MX Keys S")
+    })
+    .await;
     t.settle(Duration::from_secs(2)).await;
     assert!(
-        !t.entities.contains(&id(BATTERY)),
+        t.entities
+            .iter()
+            .filter(|e| e.as_str().starts_with("battery_"))
+            .all(|e| e.as_str().starts_with(BATTERY)),
         "two devices: {:?}",
         t.entities
     );
