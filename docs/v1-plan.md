@@ -1033,39 +1033,47 @@ Split into M15a (headless) and M15b (herdr), one session each.
   supervisor re-probes only every 300s, so the integration handles "not running" itself.
 
 **Design:**
-- [ ] `deskhand-common/src/herdr/` (`#[cfg(unix)]`, feature `herdr`, forwarded by the binary, in
-      `default` and `deskhand-headless`): `protocol.rs` (serde subset: ping, `session.snapshot`,
-      `events.subscribe`, event envelope), `client.rs` (one request per connection; subscribe
-      returns the line stream after the ack), `mod.rs` (integration).
-- [ ] Options `[integrations.herdr]`: `session`, `socket`; else `HERDR_SOCKET_PATH`,
+- [x] `deskhand-common/src/herdr/` (`#[cfg(unix)]`, always compiled: no extra dependencies; the
+      binary's `herdr` feature, in `default` and `deskhand-headless`, wires it): `client.rs`
+      (one request per connection, subscriptions as line streams, the snapshot subset),
+      `tracker.rs` (agents, transitions, snapshot diffs; pure), `mod.rs` (integration),
+      `fake.rs` and `tests.rs`.
+- [x] Options `[integrations.herdr]`: `session`, `socket`; else `HERDR_SOCKET_PATH`,
       `HERDR_SESSION`, the default socket. One session.
-- [ ] Probe: available when the socket or the herdr config dir exists; the server need not run.
-- [ ] Run loop (never `Err` for a missing herdr): disconnected → `herdr_running` off, counts 0,
+- [x] Probe: available when the socket or the herdr config dir exists; the server need not run.
+- [x] Run loop (never `Err` for a missing herdr): disconnected → `herdr_running` off, counts 0,
       retry 1s→10s. Connected → a **watch** subscription (pane created/closed/exited,
       agent_detected, workspace renamed/closed), a snapshot seeding state **without events**, a
       **status** subscription with one `pane.agent_status_changed` per agent pane (re-snapshot
       on `pane_not_found`). Status events apply in order; watch events and a 60s timer trigger a
       debounced (100ms/500ms) re-snapshot; when the agent pane set changes, open the new status
       subscription before dropping the old. Watch EOF → disconnected (no `exited` events).
-- [ ] Transitions (herdr `done` = idle; `unknown` fires nothing): → working `working`,
+- [x] Transitions (herdr `done` = idle; `unknown` fires nothing): → working `working`,
       → blocked `blocked`, working/blocked → idle `done`, released/closed `exited`.
-- [ ] Entities (no per-pane entities, so no churn when herdr restarts): `herdr_running`
+- [x] Entities (no per-pane entities, so no churn when herdr restarts): `herdr_running`
       (binary_sensor, attrs version, session), `herdr_agents` (count, attr `agents`
       `[{agent, workspace, status, cwd, pane}]`), `herdr_working`, `herdr_blocked` (counts, attr
       `agents` `["claude @ deskhand"]`), `herdr_agent` event (`working`/`blocked`/`done`/`exited`,
       attrs agent, workspace, pane, cwd, previous). Traffic: one event and one or two state
       updates per transition.
-- [ ] Tests against a fake herdr server (Unix listener on a tempfile, real herdr semantics: one
+- [x] Tests against a fake herdr server (Unix listener on a tempfile, real herdr semantics: one
       request per connection, one subscribe, `pane_id` required, `pane_not_found`, pushes,
       stop/restart): seed fires nothing; working→blocked→working→idle; herdr `done`; new agent
       rebuilds the subscription; pane close; server stop/restart; the `pane_not_found` race.
-- [ ] Docs (entities, configuration, home-assistant "notify my phone when an agent is blocked or
+- [x] Docs (entities, configuration, home-assistant "notify my phone when an agent is blocked or
       done"), a blueprint, CHANGELOG.
+- [x] `dev/herdr/fake-agent.sh` drives a scratch session (`deskhand-dev`) with
+      `pane report-agent`/`release-agent` (herdr 0.9.1's CLI wants the pane id first).
 - **Accept:** on the dev host with `herdr --session <scratch> server` and a fake agent
   (`pane.report_agent`), the dev HA shows the counts, and an automation on `herdr_agent` fires
   for `blocked` and `done`; `herdr server stop` turns `herdr_running` off and a restart
   reconnects. Don't disturb the user's running sessions. On the user's VMs: the device shows
   herdr agents.
+- Done on the dev host (2026-11-07): the counts in the dev HA; an automation on `herdr_agent`
+  logged "claude @ ~ is blocked" and "… is done" (and nothing for `working`); a second agent in
+  a new pane was followed; `exited` on release; the raw MQTT stream had exactly one event per
+  transition; the blueprint ran its actions for `blocked` and `done` only. The user's real
+  herdr session was not touched. Pending: the user's VMs.
 
 ### M16–M19 (post-V1): Logitech HID++ peripheral batteries
 Context (2026-11-04, with the user): an MX Keys S on a Logi Bolt receiver does not show up in
@@ -1480,6 +1488,7 @@ the MX Keys S has all of the keyboard ones (M16 feature table).
 | 2026-11-05 | M19 (part) | Opt-in keyboard backlight (`controls = ["backlight"]`): switch, level, mode select (added: a level forces manual mode) and three timeouts on the keyboard's device. Generic `Backlight`/`Controller` model in common; 0x1982 in the HID++ adapter (looked up only when enabled, events for key presses, read-modify-write as Solaar does); commands only reach a connected keyboard. Mock backlight with the M16 values, 4 source tests (opt-in, capture replay, writes, asleep), adapter and kit tests. Docs: entities, configuration, two HA automations, "Future HID++ controls" in §8, README, CHANGELOG. `deny.toml`: RUSTSEC-2026-0440 (dev-only). Host check open |
 | 2026-11-06 | Fix | Peripheral keys from the hardware id: Spook reported orphaned long-term statistics on the KDE host because the kernel names a Logitech device that was asleep at setup `Logitech Wireless Keyboard PID:4075` and renames it once awake, so the model-name key (and with it the entities) changed. `key_for(serial, model, fallback)` now prefers the serial and skips such placeholder names (`is_placeholder_name`); UPower drops them as the model; HID++ keys by the unit ID (receiver 0xB5, else 0x0003) and reports names only once read when it has none; the kit takes the name from a source that knows the model. One-time id change, in CHANGELOG. UPower mock test (placeholder then real name, same ids), kit and key tests, HID++ tests on unit-id keys |
 | 2026-11-07 | M15a | Planned M15 against herdr 0.9.1 (findings in M15b: per-pane status subscriptions, one request per connection, `done` needs a client) and split it. Headless mode: `[general] headless` with `HEADLESS_OFF` defaults, discovery cleanup over all candidate capabilities, `setup --headless` (default.target unit, `reenable`, lingering offer), doctor/uninstall hints, HM `headless` option, `deskhand-headless` package and unit, `checks.headless-e2e` (online at boot without a login, no session entities). |
+| 2026-11-07 | M15b | herdr integration: a client for herdr's one-request-per-connection socket API, a watch subscription for structure plus a per-pane status subscription rebuilt when the agent set changes (opened before the old one is dropped; `pane_not_found` re-reads first), debounced re-snapshots and a 60s resync, Deskhand's own `done` (working/blocked → idle; herdr's needs a client). Counts, `herdr_running` and the `herdr_agent` event; no per-pane entities. Waits for the server and reconnects. Tests against a fake server with herdr's rules (9, real time, 25 repeated runs clean); live on the dev host and HA with `dev/herdr/fake-agent.sh`; blueprint `herdr_agent_notify`. |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.

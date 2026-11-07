@@ -142,6 +142,8 @@ The other options, by capability:
 | `appearance` | `light_scheme` | `"BreezeLight"` | KDE colour scheme for the dark mode switch's off position. |
 | `appearance` | `dark_scheme` | `"BreezeDark"` | ... and its on position. |
 | `shortcuts` | `invoke` | `[]` | KDE shortcuts Home Assistant may trigger, one button each. See [below](#kde-shortcuts-as-buttons). |
+| `herdr` | `session` | herdr's default | A named herdr session (`herdr --session <name>`) to follow. One session per Deskhand. |
+| `herdr` | `socket` | | The server socket, instead of `session`. Without either, Deskhand uses `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then `~/.config/herdr/herdr.sock`, as herdr does. |
 
 ## `[[script]]`: buttons that run commands
 
@@ -267,7 +269,8 @@ Deskhand never pairs or unpairs devices; use Logi Options+ or Solaar for that.
 
 Deskhand also runs where nobody sits at a desktop: a home server, or a VM
 running coding agents. There it publishes the device info, system metrics,
-configured systemd units, scripts and command sensors.
+configured systemd units, scripts and command sensors, and the coding agents
+in [herdr](entities.md#coding-agents-herdr).
 
 ```toml
 [general]

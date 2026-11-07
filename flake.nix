@@ -94,6 +94,7 @@
             features = [
               "linux"
               "setup"
+              "herdr"
             ];
           };
         }

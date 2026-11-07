@@ -165,6 +165,38 @@ actions:
 
 Start it from Home Assistant with `button.press` on `button.office_pc_run_backup`.
 
+### Notify your phone when a coding agent needs you
+
+With agents in [herdr](entities.md#coding-agents-herdr) (on this machine or a
+VM running Deskhand), `herdr_agent` fires `blocked` when one waits for you
+and `done` when it finishes. With the device "Dev VM":
+
+```yaml
+alias: Coding agent needs me
+mode: queued
+triggers:
+  - trigger: state
+    entity_id: event.dev_vm_coding_agent
+    not_to: unavailable
+conditions:
+  - condition: template
+    value_template: >
+      {{ trigger.to_state.attributes.event_type in ['blocked', 'done'] }}
+actions:
+  - action: notify.mobile_app_my_phone
+    data:
+      title: >
+        {{ trigger.to_state.attributes.label }}
+        {{ 'is waiting for you' if trigger.to_state.attributes.event_type == 'blocked'
+           else 'is done' }}
+      message: "{{ trigger.to_state.attributes.cwd }}"
+```
+
+`mode: queued` keeps two agents finishing at once from dropping one. The
+[`herdr_agent_notify`](../blueprints/automation/deskhand/herdr_agent_notify.yaml)
+blueprint does the same, with a choice of events. For a dashboard, show
+`sensor.dev_vm_coding_agents_waiting` and its `agents` attribute.
+
 ### Actionable notifications
 
 Rich notifications are JSON published to `deskhand/<node>/notification/set`.

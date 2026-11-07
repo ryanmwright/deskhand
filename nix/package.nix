@@ -13,6 +13,7 @@
     "setup"
     "audio-pulse"
     "hidpp"
+    "herdr"
   ],
 }:
 craneLib.buildPackage (

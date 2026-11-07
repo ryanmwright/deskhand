@@ -86,6 +86,17 @@ impl Setup {
             Box::new(deskhand_common::SessionState::new()),
             Box::new(deskhand_common::InCall::new()),
         ];
+        #[cfg(all(unix, feature = "herdr"))]
+        {
+            let options = self
+                .config
+                .integration("herdr")
+                .ok()
+                .and_then(|c| c.options::<deskhand_common::herdr::HerdrOptions>().ok())
+                .map(|p| p.value)
+                .unwrap_or_default();
+            list.push(Box::new(deskhand_common::herdr::Herdr::new(&options)));
+        }
         #[cfg(feature = "linux")]
         {
             let env = deskhand_linux::LinuxEnv::from_env();

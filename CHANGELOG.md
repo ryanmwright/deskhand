@@ -31,6 +31,14 @@ section of the tagged version as the release notes.
 
 ### Added
 
+- **Coding agents in herdr** (capability `herdr`, on by default where herdr
+  is installed). `herdr_running`, the counts `herdr_agents`, `herdr_working`
+  and `herdr_blocked` (with the agents in an attribute), and a `herdr_agent`
+  event for `working`, `blocked`, `done` and `exited`, with the agent,
+  workspace and directory, to notify your phone when an agent waits for you
+  or finishes. Deskhand waits for the herdr server and reconnects when it
+  restarts. Options: `session`, `socket`. A blueprint,
+  `herdr_agent_notify`, runs actions for the events you pick.
 - **Headless mode** for servers and VMs. `[general] headless = true` turns the
   session and desktop capabilities off by default (`enabled = true` brings one
   back) and the tray icon off. `deskhand setup --headless` installs a unit

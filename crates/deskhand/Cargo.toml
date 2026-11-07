@@ -8,7 +8,7 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["kde", "tray", "setup", "audio-pulse", "hidpp"]
+default = ["kde", "tray", "setup", "audio-pulse", "hidpp", "herdr"]
 linux = ["dep:deskhand-linux"]
 # Logitech HID++ peripheral batteries (receivers over /dev/hidraw).
 hidpp = ["linux", "deskhand-linux/hidpp", "dep:deskhand-hidpp"]
@@ -16,6 +16,8 @@ kde = ["linux", "dep:deskhand-kde"]
 audio-pulse = ["deskhand-linux?/audio-pulse"]
 tray = ["dep:ksni"]
 setup = ["dep:inquire", "dep:mdns-sd", "dep:toml"]
+# Coding agents in herdr (Unix socket; no extra dependencies).
+herdr = []
 
 [dependencies]
 anyhow.workspace = true

@@ -149,6 +149,7 @@ fn features() -> Vec<&'static str> {
         (cfg!(feature = "setup"), "setup"),
         (cfg!(feature = "audio-pulse"), "audio-pulse"),
         (cfg!(feature = "hidpp"), "hidpp"),
+        (cfg!(feature = "herdr"), "herdr"),
     ] {
         if on {
             f.push(name);

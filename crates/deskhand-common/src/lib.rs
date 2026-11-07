@@ -2,12 +2,14 @@
 //!
 //! Scripts, `[[shortcut]]` config, command sensors, system metrics, derived sensors such as
 //! `session_state` and `in_call`, the domain kits (media, audio, power) that keep entity ids
-//! identical across operating systems, and peripheral batteries merged from any number of
-//! sources.
+//! identical across operating systems, peripheral batteries merged from any number of
+//! sources, and coding agents in herdr.
 
 pub mod audio;
 pub mod command_sensors;
 pub mod derived;
+#[cfg(unix)]
+pub mod herdr;
 pub mod in_call;
 pub mod info;
 pub mod media;

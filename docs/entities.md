@@ -154,6 +154,23 @@ Audio needs PulseAudio or PipeWire's pulse server.
 | `wifi_ssid` | sensor | Attribute `signal`. |
 | `network_connectivity` | sensor | NetworkManager's `full`, `limited`, `portal`, `none`. |
 
+## Coding agents (herdr)
+
+Agents running in [herdr](https://github.com/herdrdev/herdr) on this machine
+(capability `herdr`). With herdr on a VM you attach to remotely, run Deskhand
+on the VM ([headless](configuration.md#headless-machines-servers-and-vms)).
+There is no entity per agent: herdr's pane ids only last as long as its
+server. The agent's name, workspace and directory come in attributes and
+event data instead.
+
+| Id | Type | |
+|---|---|---|
+| `herdr_running` | binary sensor (running) | herdr's server is up; attributes `version`, `socket`. Deskhand waits for it when it is not. |
+| `herdr_agents` | sensor | Agents in herdr; attribute `agents`: `[{agent, name, workspace, status, cwd, pane}]`, `status` one of `idle`, `working`, `blocked`, `unknown`. |
+| `herdr_working` | sensor | Agents working; attribute `agents`: `["claude @ deskhand", …]` (the agent, or its name, and the workspace). |
+| `herdr_blocked` | sensor | Agents waiting for you (a permission prompt, a question); attribute `agents` as above. |
+| `herdr_agent` | event | `working`, `blocked`, `done` (it was working or blocked and is now idle), `exited` (the agent quit or its pane closed), each with `agent`, `name`, `label`, `workspace`, `cwd`, `pane`, `status` and `previous` (the status before). Nothing fires for the agents already there when Deskhand or herdr starts. |
+
 ## System
 
 | Id | Type | |

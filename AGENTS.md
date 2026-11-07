@@ -40,7 +40,7 @@ crates/
                       # supervisor, config, identity. No MQTT, no D-Bus, no platform code.
   deskhand-mqtt/      # Transport impl: rumqttc, topics, HA discovery, birth/LWT, stale cleanup
   deskhand-common/    # platform-neutral integrations: scripts, command sensors, metrics,
-                      # derived sensors, domain kits (media/audio/power)
+                      # derived sensors, domain kits (media/audio/power), herdr
   deskhand-linux/     # shared freedesktop integrations (logind, MPRIS, UPower, BlueZ, ...)
   deskhand-kde/       # KDE Plasma backend (KWin, PowerDevil, kglobalaccel, ...)
   deskhand-hidpp/     # Logitech HID++ receivers (platform-neutral; HidBackend trait,
@@ -52,7 +52,7 @@ crates/
 
 - `deskhand-core` defines one `Integration` trait. Integrations register entities through `Ctx` and get typed handles back (`Sensor`, `Switch` plus a command stream, and so on). Per-capability traits are deliberately not used.
 - Each backend returns candidate integrations grouped by capability, in priority order. The supervisor probes them and starts the first available one per capability.
-- **Plugins are compile-time**, selected with cargo features on the `deskhand` binary (`kde`, `linux`, `tray`, `setup`, `audio-pulse`, `hidpp`; the flake's `deskhand-headless` package is `linux,setup`). Do not use dynamic loading; Rust handles it poorly and compile-time selection is simpler and safer.
+- **Plugins are compile-time**, selected with cargo features on the `deskhand` binary (`kde`, `linux`, `tray`, `setup`, `audio-pulse`, `hidpp`, `herdr`; the flake's `deskhand-headless` package is `linux,setup,herdr`). Do not use dynamic loading; Rust handles it poorly and compile-time selection is simpler and safer.
 - A backend only registers the capabilities its platform supports. The core must not assume any capability exists.
 - Core API in brief: `Integration { id, capability, description, probe, run(&self, ctx) }`. `Ctx` hands out handles (`ctx.sensor(spec)`, `ctx.switch(spec) -> (Switch, Commands<bool>)`, ...). Call `ctx.ready()` once the initial states are set. An entity can sit on a Home Assistant device of its own with `EntitySpec::on_device(Arc<SubDevice>)` (peripherals, receivers). The hub owns all state; the transport gets `HubEvent`s and requests a full `Snapshot` on every (re)connect.
 - Tests that need a transport use `deskhand_core::testing::FakeTransport` (feature `test-util`, re-exported by `deskhand-testkit`) and `#[tokio::test(start_paused = true)]`.
@@ -73,6 +73,7 @@ Everything runs inside the flake devShell: `nix develop` (or prefix commands wit
 | `dev/ha/states.sh [regex]` | prints matching HA entity states (default: `deskhand`) |
 | `dev/ha/api.sh METHOD PATH [JSON]` | calls the dev HA REST API (services, automations, history) |
 | `just mqtt-watch` | prints all broker traffic |
+| `dev/herdr/fake-agent.sh start\|report\|release\|split\|stop` | a fake coding agent in a scratch herdr session (`deskhand-dev`); point Deskhand at it with `[integrations.herdr] session = "deskhand-dev"` |
 | `nix build` | builds the `deskhand` package (crane; `nix/package.nix`) |
 | `just e2e` | the `kde-e2e` NixOS test: Plasma VM with the packaged daemon (needs KVM; nightly in CI) |
 | `just headless-e2e` | the `headless-e2e` NixOS test: lingering user, no desktop, Deskhand online at boot without a login (needs KVM, ~1 min) |
@@ -103,4 +104,4 @@ The V1 plan is approved: see [`docs/v1-plan.md`](docs/v1-plan.md).
 - Each milestone (M0–M14) in that plan is sized for one session. Start each session by reading the plan and continuing with the first unchecked milestone.
 - Tick the plan's checkboxes as work completes, and add a row to its Session log at the end of each session.
 
-All V1 milestones (M0–M14) are done. v0.1.1 is the first release (v0.1.0 was tagged but never published); the release workflow creates a draft to publish. Power buttons are opt-in (none by default). The two host checks below were assumed good for the tag; the user confirms them later. M15a (headless mode) is done; its check on the user's NixOS VMs is pending. Next step: **M15b (herdr integration)**, designed in `docs/v1-plan.md` from probing herdr 0.9.1 (per-pane status subscriptions, one request per connection); test against a scratch `herdr --session`, never the user's sessions. Also planned, independent of M15: **M16–M19 (Logitech HID++ peripheral batteries)**; M16 (probe on the KDE host), M17 (sub-devices, `peripheral_battery`) and M18 (the HID++ source, mock-tested) are done; M19's backlight and docs are done, and only its KDE host check (the Accept list in the plan) is left. Still open: the binary-cache CI decision (plan, M13). Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.
+All V1 milestones (M0–M14) are done. v0.1.1 is the first release (v0.1.0 was tagged but never published); the release workflow creates a draft to publish. Power buttons are opt-in (none by default). The two host checks below were assumed good for the tag; the user confirms them later. M15 (headless mode, herdr integration) is done; its check on the user's NixOS VMs is pending. herdr's socket API has surprises (per-pane status subscriptions only, one request per connection, `done` needs a client): see M15b in `docs/v1-plan.md` before changing `deskhand-common/src/herdr/`, and test against a scratch session (`dev/herdr/fake-agent.sh`), never the user's sessions. Also planned, independent of M15: **M16–M19 (Logitech HID++ peripheral batteries)**; M16 (probe on the KDE host), M17 (sub-devices, `peripheral_battery`) and M18 (the HID++ source, mock-tested) are done; M19's backlight and docs are done, and only its KDE host check (the Accept list in the plan) is left. Still open: the binary-cache CI decision (plan, M13). Pending on the KDE host: resume from suspend (M6) and a browser call with camera and a muted mic (M9). Bluetooth (M7) and monitor brightness (M11) are confirmed there.

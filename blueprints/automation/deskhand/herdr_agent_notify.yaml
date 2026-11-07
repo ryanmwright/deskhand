@@ -1,0 +1,61 @@
+blueprint:
+  name: Deskhand – a coding agent needs you
+  description: >
+    Runs your actions (a phone notification, a light) when a coding agent in
+    herdr waits for you or finishes, on a computer or VM running Deskhand.
+    In the actions, `{{ label }}` is the agent and its workspace ("claude @
+    deskhand"), `{{ event }}` is blocked, done, working or exited,
+    `{{ message }}` is a ready sentence ("claude @ deskhand is waiting for
+    you"), and `{{ workspace }}` and `{{ cwd }}` are also set.
+  domain: automation
+  source_url: https://github.com/ryanmwright/deskhand/blob/main/blueprints/automation/deskhand/herdr_agent_notify.yaml
+  input:
+    agent_event:
+      name: Coding agent event entity
+      description: The machine's "Coding agent" event entity.
+      selector:
+        entity:
+          filter:
+            - integration: mqtt
+              domain: event
+    events:
+      name: When an agent
+      default: [blocked, done]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Waits for you (blocked)
+              value: blocked
+            - label: Is done (working or blocked, now idle)
+              value: done
+            - label: Starts working
+              value: working
+            - label: Quits (or its pane closes)
+              value: exited
+    actions:
+      name: Actions
+      description: >
+        For example notify.mobile_app_my_phone with title
+        "{{ message }}" and message "{{ cwd }}".
+      selector:
+        action: {}
+# Two agents finishing at once are two events: handle each.
+mode: queued
+triggers:
+  - trigger: state
+    entity_id: !input agent_event
+    not_to: [unavailable, unknown]
+variables:
+  events: !input events
+  event: "{{ trigger.to_state.attributes.event_type }}"
+  label: "{{ trigger.to_state.attributes.label }}"
+  workspace: "{{ trigger.to_state.attributes.workspace }}"
+  cwd: "{{ trigger.to_state.attributes.cwd }}"
+  message: >
+    {{ label }} {{ {'blocked': 'is waiting for you', 'done': 'is done',
+    'working': 'started working', 'exited': 'quit'}.get(event, event) }}
+conditions:
+  - condition: template
+    value_template: "{{ event in events }}"
+actions: !input actions
