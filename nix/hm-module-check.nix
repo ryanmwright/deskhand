@@ -63,7 +63,16 @@ let
       settings.mqtt.host = "broker.lan";
     };
   };
+  headless = eval {
+    services.deskhand = {
+      enable = true;
+      headless = true;
+      package = pkgs.hello;
+      settings.mqtt.host = "broker.lan";
+    };
+  };
   service = good.systemd.user.services.deskhand;
+  headlessService = headless.systemd.user.services.deskhand;
 in
 assert failed good == [ ];
 assert lib.length (failed withPassword) == 1;
@@ -71,6 +80,9 @@ assert disabled.systemd.user.services == { };
 assert service.Service.Type == "notify";
 assert lib.hasInfix " run" service.Service.ExecStart;
 assert service.Install.WantedBy == [ "graphical-session.target" ];
+assert service.Unit.PartOf == [ "graphical-session.target" ];
+assert headlessService.Install.WantedBy == [ "default.target" ];
+assert !(headlessService.Unit ? PartOf || headlessService.Unit ? After);
 pkgs.runCommand "deskhand-hm-module-check" { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
   config=${good.xdg.configFile."deskhand/config.toml".source}
   grep -qx 'password_file = "/run/secrets/mqtt"' "$config"
@@ -78,6 +90,10 @@ pkgs.runCommand "deskhand-hm-module-check" { nativeBuildInputs = [ pkgs.gnugrep 
   grep -qx 'compat_mqtt_media_player = true' "$config"
   grep -qx 'tray = true' "$config"
   grep -qx 'tray = false' ${noTray.xdg.configFile."deskhand/config.toml".source}
+  ! grep -q headless "$config"
+  headless=${headless.xdg.configFile."deskhand/config.toml".source}
+  grep -qx 'headless = true' "$headless"
+  grep -qx 'tray = false' "$headless"
   grep -q -- "--config $config run" <<< "${service.Service.ExecStart}"
   cp "$config" $out
 ''

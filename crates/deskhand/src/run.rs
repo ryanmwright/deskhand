@@ -20,10 +20,13 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
     let device = setup.device.clone();
     tracing::info!(name = %device.name, node_id = %device.node_id, "device identity");
 
-    let disabled: BTreeSet<String> = setup
-        .config
-        .configured_integrations()
-        .into_iter()
+    // Every capability, not only the configured ones: headless turns some
+    // off without a table, and their entities from a desktop run must go.
+    let candidates = setup.candidates();
+    let disabled: BTreeSet<String> = candidates
+        .iter()
+        .map(|c| c.capability().to_owned())
+        .chain(setup.config.configured_integrations())
         .filter(|c| {
             setup
                 .config
@@ -42,7 +45,7 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
     let supervisor = Supervisor::new(
         hub_handle.clone(),
         &setup.config,
-        setup.candidates(),
+        candidates,
         SupervisorOptions::default(),
         cancel.clone(),
     );
@@ -61,7 +64,7 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
     // Quit from the tray.
     let quit = CancellationToken::new();
     #[cfg(feature = "tray")]
-    if setup.general.tray {
+    if setup.general.tray && !setup.general.headless {
         tokio::spawn(crate::tray::run(
             hub_handle.clone(),
             setup.device.name.clone(),

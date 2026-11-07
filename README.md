@@ -109,6 +109,10 @@ Assistant may press, tests the connection, writes `~/.config/deskhand/config.tom
 to a separate private file) and installs and starts a systemd user service that
 runs whenever you are logged in to your desktop.
 
+On a server or VM without a desktop, run `deskhand setup --headless`: the
+service then starts at boot without a login, and only what makes sense there
+is published ([headless machines](docs/configuration.md#headless-machines-servers-and-vms)).
+
 ### 4. Find it in Home Assistant
 
 **Settings → Devices & services → MQTT** now lists your computer. Try

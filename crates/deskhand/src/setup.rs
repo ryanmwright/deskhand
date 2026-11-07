@@ -54,6 +54,10 @@ pub struct Options {
     /// hibernate, reboot, poweroff, logout [default: none].
     #[arg(long, value_delimiter = ',')]
     pub power_buttons: Vec<String>,
+    /// A machine without a desktop session (a server or VM): start at boot
+    /// without a login, session and desktop integrations off by default.
+    #[arg(long)]
+    pub headless: bool,
 }
 
 /// Power buttons setup offers: config name and question label.
@@ -77,6 +81,8 @@ pub struct Answers {
     pub name: Option<String>,
     /// `[integrations.power] buttons`; empty means none.
     pub power_buttons: Vec<String>,
+    /// `[general] headless`.
+    pub headless: bool,
 }
 
 impl Answers {
@@ -107,6 +113,11 @@ pub fn render_config(a: &Answers, password_file: Option<&Path>) -> String {
     if let Some(name) = &a.name {
         out += &format!("[device]\nname = {}\n\n", quoted(name));
     }
+    if a.headless {
+        out += "# No desktop session: session and desktop integrations are off unless\n\
+                # enabled in their [integrations.<name>] table.\n\
+                [general]\nheadless = true\n\n";
+    }
     out += "[mqtt]\n";
     out += &format!("host = {}\n", quoted(&a.host));
     out += &format!("port = {}\n", a.port);
@@ -126,7 +137,8 @@ pub fn render_config(a: &Answers, password_file: Option<&Path>) -> String {
         let list: Vec<String> = a.power_buttons.iter().map(|b| quoted(b)).collect();
         out += &format!(
             "\n# Power buttons Home Assistant may press (none by default).\n\
-             [integrations.power]\nbuttons = [{}]\n",
+             [integrations.power]\n{}buttons = [{}]\n",
+            if a.headless { "enabled = true\n" } else { "" },
             list.join(", ")
         );
     }
@@ -369,14 +381,23 @@ async fn discover() -> Vec<Candidate> {
 
 pub const UNIT_NAME: &str = "deskhand.service";
 
-/// The systemd user unit for `exe` (and a non-default config path).
-pub fn render_unit(exe: &Path, config: Option<&Path>) -> String {
+/// The systemd user unit for `exe` (and a non-default config path). It
+/// follows the graphical session, or with `headless` the user manager
+/// (which lingering starts at boot).
+pub fn render_unit(exe: &Path, config: Option<&Path>, headless: bool) -> String {
     let config_arg = config.map_or(String::new(), |c| format!(" --config {}", c.display()));
+    let (unit, target) = if headless {
+        ("", "default.target")
+    } else {
+        (
+            "PartOf=graphical-session.target\nAfter=graphical-session.target\n",
+            "graphical-session.target",
+        )
+    };
     format!(
         "[Unit]\n\
          Description=Deskhand: this desktop in Home Assistant\n\
-         PartOf=graphical-session.target\n\
-         After=graphical-session.target\n\
+         {unit}\
          \n\
          [Service]\n\
          Type=notify\n\
@@ -385,7 +406,7 @@ pub fn render_unit(exe: &Path, config: Option<&Path>) -> String {
          RestartSec=5\n\
          \n\
          [Install]\n\
-         WantedBy=graphical-session.target\n",
+         WantedBy={target}\n",
         exe.display()
     )
 }
@@ -461,14 +482,15 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Writes, enables and (re)starts the user unit.
-fn install_service(exe: &Path, config: Option<&Path>) -> anyhow::Result<PathBuf> {
+/// Writes, enables and (re)starts the user unit. `reenable` moves the
+/// install symlink when the target changed (desktop ↔ headless).
+fn install_service(exe: &Path, config: Option<&Path>, headless: bool) -> anyhow::Result<PathBuf> {
     let unit_path = user_unit_dir().join(UNIT_NAME);
     std::fs::create_dir_all(unit_path.parent().expect("unit dir"))?;
-    std::fs::write(&unit_path, render_unit(exe, config))
+    std::fs::write(&unit_path, render_unit(exe, config, headless))
         .with_context(|| format!("cannot write {}", unit_path.display()))?;
     systemctl(&["daemon-reload"])?;
-    systemctl(&["enable", UNIT_NAME])?;
+    systemctl(&["reenable", UNIT_NAME])?;
     systemctl(&["restart", UNIT_NAME])?;
     Ok(unit_path)
 }
@@ -521,12 +543,13 @@ fn answers_from_flags(o: &Options) -> anyhow::Result<Answers> {
         password,
         name: o.name.clone(),
         power_buttons: o.power_buttons.clone(),
+        headless: o.headless,
     })
 }
 
 /// Prompts for everything. `defaults` pre-fills the answers (after a failed
-/// connection test).
-async fn ask(defaults: Option<&Answers>) -> anyhow::Result<Answers> {
+/// connection test); `headless` is `--headless` (not asked again).
+async fn ask(defaults: Option<&Answers>, headless: bool) -> anyhow::Result<Answers> {
     use inquire::{Confirm, MultiSelect, Password, PasswordDisplayMode, Select, Text};
 
     let (host, port) = match defaults {
@@ -604,6 +627,13 @@ async fn ask(defaults: Option<&Answers>) -> anyhow::Result<Answers> {
     let name = Text::new("Device name in Home Assistant:")
         .with_default(&default_name)
         .prompt()?;
+    let headless = headless
+        || Confirm::new("Is this a headless machine (a server or VM nobody sits at)?")
+            .with_default(defaults.map_or(!crate::doctor::graphical_session(), |d| d.headless))
+            .with_help_message(
+                "Starts at boot without a login; session and desktop integrations are off",
+            )
+            .prompt()?;
     let labels: Vec<&str> = POWER_BUTTONS.iter().map(|(_, l)| *l).collect();
     let preselected: Vec<usize> = POWER_BUTTONS
         .iter()
@@ -631,6 +661,7 @@ async fn ask(defaults: Option<&Answers>) -> anyhow::Result<Answers> {
         password,
         name: Some(name).filter(|n| !n.is_empty() && *n != device_default_name()),
         power_buttons,
+        headless,
     })
 }
 
@@ -659,7 +690,7 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
     }
 
     let mut answers = if interactive {
-        ask(None).await?
+        ask(None, o.headless).await?
     } else {
         answers_from_flags(&o)?
     };
@@ -681,7 +712,9 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
                     )
                     .prompt()?;
                     match next {
-                        "Change the settings" => answers = ask(Some(&answers)).await?,
+                        "Change the settings" => {
+                            answers = ask(Some(&answers), o.headless).await?;
+                        }
                         "Save anyway" => break,
                         _ => return Ok(()),
                     }
@@ -711,16 +744,24 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
         println!("Not installing the service: {why}");
         return Ok(());
     }
+    let starts = if answers.headless {
+        "starts at boot, without a login"
+    } else {
+        "starts with your desktop session"
+    };
     let install = !interactive
-        || inquire::Confirm::new(
-            "Install and start the systemd user service (starts with your desktop session)?",
-        )
+        || inquire::Confirm::new(&format!(
+            "Install and start the systemd user service ({starts})?"
+        ))
         .with_default(true)
         .prompt()?;
     if install {
         let config_arg = explicit_config.then_some(config_path);
-        let path = install_service(&exe, config_arg)?;
+        let path = install_service(&exe, config_arg, answers.headless)?;
         println!("✓ Installed {} and started it", path.display());
+        if answers.headless {
+            offer_linger(interactive)?;
+        }
         println!("  Logs: journalctl --user -u {UNIT_NAME} -f    Status: deskhand doctor");
     } else {
         println!("Start it yourself with: {} run", exe.display());
@@ -728,6 +769,40 @@ pub async fn setup(config_path: &Path, explicit_config: bool, o: Options) -> any
     println!(
         "The device should appear in Home Assistant under Settings → Devices & services → MQTT."
     );
+    Ok(())
+}
+
+/// Headless: the user manager (and so the service) only runs at boot with
+/// lingering. Turns it on (`loginctl` asks polkit; NixOS declares it).
+fn offer_linger(interactive: bool) -> anyhow::Result<()> {
+    let user = std::env::var("USER").unwrap_or_default();
+    if crate::doctor::linger_enabled(&user) != Some(false) {
+        return Ok(());
+    }
+    println!();
+    println!("Lingering is off for {user}, so the service only runs while you are logged in.");
+    if Path::new("/etc/NIXOS").exists() {
+        println!("On NixOS, set it in your system configuration:");
+        println!("  users.users.{user}.linger = true;");
+        return Ok(());
+    }
+    let enable = !interactive
+        || inquire::Confirm::new("Enable lingering now (loginctl enable-linger)?")
+            .with_default(true)
+            .prompt()?;
+    if !enable {
+        println!("Later: loginctl enable-linger {user}");
+        return Ok(());
+    }
+    let ok = std::process::Command::new("loginctl")
+        .args(["--no-ask-password", "enable-linger", &user])
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok {
+        println!("✓ Lingering enabled: Deskhand now starts at boot");
+    } else {
+        println!("✗ loginctl was not allowed to; run: sudo loginctl enable-linger {user}");
+    }
     Ok(())
 }
 
@@ -817,6 +892,7 @@ mod tests {
             password: Some("pw".into()),
             name: Some("Office PC".into()),
             power_buttons: vec!["suspend".into(), "reboot".into()],
+            headless: false,
         }
     }
 
@@ -879,6 +955,27 @@ mod tests {
     }
 
     #[test]
+    fn headless_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let a = Answers {
+            headless: true,
+            ..answers()
+        };
+        save(&path, &a).unwrap();
+        let config = deskhand_core::Config::load(&path).unwrap();
+        assert!(config.general().unwrap().value.headless);
+        // Power buttons stay on despite the headless default.
+        let power = config.integration("power").unwrap();
+        assert_eq!(power.enabled, deskhand_core::Enabled::On);
+        assert_eq!(
+            config.integration("media").unwrap().enabled,
+            deskhand_core::Enabled::Off
+        );
+        assert!(!render_config(&answers(), None).contains("[general]"));
+    }
+
+    #[test]
     fn anonymous_tls_config() {
         let a = Answers {
             tls: true,
@@ -932,11 +1029,19 @@ mod tests {
 
     #[test]
     fn unit_file() {
-        let unit = render_unit(Path::new("/opt/deskhand"), None);
+        let unit = render_unit(Path::new("/opt/deskhand"), None, false);
         assert!(unit.contains("ExecStart=/opt/deskhand run\n"));
         assert!(unit.contains("Type=notify\n"));
+        assert!(unit.contains("PartOf=graphical-session.target\n"));
         assert!(unit.contains("WantedBy=graphical-session.target\n"));
-        let unit = render_unit(Path::new("/opt/deskhand"), Some(Path::new("/etc/d.toml")));
+        let unit = render_unit(Path::new("/opt/deskhand"), None, true);
+        assert!(!unit.contains("graphical-session"), "{unit}");
+        assert!(unit.contains("WantedBy=default.target\n"));
+        let unit = render_unit(
+            Path::new("/opt/deskhand"),
+            Some(Path::new("/etc/d.toml")),
+            false,
+        );
         assert!(unit.contains("ExecStart=/opt/deskhand --config /etc/d.toml run\n"));
         assert!(
             service_blocker(

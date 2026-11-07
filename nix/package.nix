@@ -31,6 +31,8 @@ craneLib.buildPackage (
       mkdir -p $out/share/systemd/user
       substitute data/deskhand.service.in $out/share/systemd/user/deskhand.service \
         --subst-var-by bindir $out/bin
+      substitute data/deskhand-headless.service.in $out/share/systemd/user/deskhand-headless.service \
+        --subst-var-by bindir $out/bin
     ''
     # NixOS: services.udev.packages = [ deskhand ];
     + lib.optionalString (lib.elem "hidpp" features) ''

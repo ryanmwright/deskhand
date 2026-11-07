@@ -29,6 +29,12 @@ pub struct Report {
     /// `failed`, `not installed`, ...); absent without systemd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// `[general] headless`.
+    pub headless: bool,
+    /// Whether systemd starts this user's manager at boot; absent when it
+    /// can't be told.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linger: Option<bool>,
     /// Logitech HID++ nodes (receivers and their devices).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub logitech: Vec<LogitechNode>,
@@ -73,6 +79,8 @@ pub struct Environment {
     pub os: &'static str,
     pub desktop: Option<String>,
     pub session_type: Option<String>,
+    /// A display server is reachable (`WAYLAND_DISPLAY` / `DISPLAY`).
+    pub graphical: bool,
     pub features: Vec<&'static str>,
 }
 
@@ -112,6 +120,9 @@ pub struct MqttReport {
 pub struct CapabilityReport {
     pub capability: &'static str,
     pub enabled: String,
+    /// Off only because of `[general] headless`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub headless_default: bool,
     /// The provider that would run, if any.
     pub selected: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +155,21 @@ fn features() -> Vec<&'static str> {
         }
     }
     f
+}
+
+/// Whether this process can reach a display server.
+pub fn graphical_session() -> bool {
+    let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    set("WAYLAND_DISPLAY")
+        || set("DISPLAY")
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland" || t == "x11")
+}
+
+/// Whether `user` lingers (systemd starts their manager at boot); `None`
+/// without systemd-logind's linger directory.
+pub fn linger_enabled(user: &str) -> Option<bool> {
+    let dir = Path::new("/var/lib/systemd/linger");
+    (!user.is_empty() && dir.is_dir()).then(|| dir.join(user).exists())
 }
 
 /// The user unit's active state, or `not installed`.
@@ -180,9 +206,11 @@ pub async fn report(config_path: &Path) -> Report {
         os: std::env::consts::OS,
         desktop: std::env::var("XDG_CURRENT_DESKTOP").ok(),
         session_type: std::env::var("XDG_SESSION_TYPE").ok(),
+        graphical: graphical_session(),
         features: features(),
     };
     let service = service_state().await;
+    let linger = linger_enabled(&std::env::var("USER").unwrap_or_default());
     let setup = match Setup::load(config_path) {
         Ok(s) => s,
         Err(e) => {
@@ -204,6 +232,8 @@ pub async fn report(config_path: &Path) -> Report {
                 mqtt: None,
                 integrations: Vec::new(),
                 service,
+                headless: false,
+                linger,
                 logitech: Vec::new(),
                 udev_hint: None,
             };
@@ -232,6 +262,8 @@ pub async fn report(config_path: &Path) -> Report {
         mqtt: Some(mqtt),
         integrations,
         service,
+        headless: setup.general.headless,
+        linger,
         logitech,
         udev_hint,
     }
@@ -373,6 +405,7 @@ async fn check_integrations(setup: &Setup) -> Vec<CapabilityReport> {
         let mut report = CapabilityReport {
             capability,
             enabled: enabled.to_string(),
+            headless_default: setup.config.headless_default_off(capability),
             selected: None,
             error,
             candidates: Vec::new(),
@@ -436,6 +469,20 @@ pub fn print_text(r: &Report) {
         };
         println!("  Service deskhand.service: {state}{hint}");
     }
+    if r.headless {
+        let linger = match r.linger {
+            Some(true) => "lingering on, starts at boot",
+            Some(false) => {
+                "lingering off: runs only while you are logged in \
+                 (`loginctl enable-linger`, or NixOS `users.users.<name>.linger = true`)"
+            }
+            None => "lingering unknown",
+        };
+        println!("  Headless ({linger})");
+    } else if r.config.ok && !r.environment.graphical {
+        println!("  No graphical session here. On a server or VM, set `[general] headless = true`");
+        println!("    (or run `deskhand setup --headless`) to start without a login.");
+    }
     if let Some(m) = &r.mqtt {
         let user = m
             .username
@@ -467,6 +514,7 @@ pub fn print_text(r: &Report) {
     }
     for c in &r.integrations {
         let state = match (c.enabled.as_str(), c.selected) {
+            ("false", _) if c.headless_default => "disabled (headless)".to_owned(),
             ("false", _) => "disabled".to_owned(),
             (_, Some(id)) => format!("runs {id}"),
             (_, None) => "unavailable".to_owned(),

@@ -93,6 +93,7 @@ Use only one of `password`, `password_file` and `password_command`.
 | Key | Default | |
 |---|---|---|
 | `tray` | `true` | Show the tray icon (status, Pause, open config, Quit) when the desktop has a StatusNotifierItem tray. |
+| `headless` | `false` | A machine without a desktop session (a server or VM). The session and desktop capabilities default to off; see [Headless machines](#headless-machines-servers-and-vms). No tray icon. |
 | `idle_threshold` | `"5m"` | How long without input before `user_active` turns off. |
 | `log` | `"info"` | Log filter, e.g. `"info,deskhand_mqtt=debug"`. `RUST_LOG` overrides it. Logs go to the journal: `journalctl --user -u deskhand -f`. |
 
@@ -245,8 +246,8 @@ them), Deskhand needs nothing more: they grant the same access. Deskhand and
 Solaar can run at the same time.
 
 The rule only covers the user of the active local session (`uaccess`).
-Running headless as another user would need a group-based rule instead
-(`GROUP="…", MODE="0660"`).
+On a [headless machine](#headless-machines-servers-and-vms) nobody has a local
+session, so it would need a group-based rule instead (`GROUP="…", MODE="0660"`).
 
 Once the rule is in place, Deskhand picks the receiver up within five minutes,
 or right away after `systemctl --user restart deskhand`. Receivers plugged in
@@ -261,6 +262,50 @@ controls = ["backlight"]
 ```
 
 Deskhand never pairs or unpairs devices; use Logi Options+ or Solaar for that.
+
+## Headless machines (servers and VMs)
+
+Deskhand also runs where nobody sits at a desktop: a home server, or a VM
+running coding agents. There it publishes the device info, system metrics,
+configured systemd units, scripts and command sensors.
+
+```toml
+[general]
+headless = true
+```
+
+With `headless = true`, the capabilities that need a desktop session default
+to off instead of `auto`, because on a server they either find nothing or
+follow ssh sessions (logind): `lock`, `idle`, `power`, `keep_awake`,
+`session_state`, `in_call`, `media`, `audio`, `camera`, `notifications`,
+`appearance` and every KDE capability. `enabled = true` turns one back on,
+for example the power buttons, to restart a VM from Home Assistant:
+
+```toml
+[integrations.power]
+enabled = true
+buttons = ["reboot"]
+```
+
+The service must also start without a login. It is wanted by `default.target`
+instead of the graphical session, and the user must *linger* so systemd starts
+their user manager at boot:
+
+- `deskhand setup --headless` writes the config and a headless unit, and
+  offers to run `loginctl enable-linger`.
+- With Home Manager, set `services.deskhand.headless = true` (below), and in
+  the NixOS configuration `users.users.<name>.linger = true;`. The module then
+  defaults to the slim `deskhand-headless` package (no KDE, tray or libpulse).
+- Packages ship the unit as `deskhand-headless.service`.
+
+`deskhand doctor` shows whether lingering is on, and lists the capabilities
+headless turned off as `disabled (headless)`.
+
+**Cloned VMs:** the device's node id comes from `/etc/machine-id` and the user
+name. VMs cloned from one image share the machine id, and so would share one
+device in Home Assistant. Give each clone its own id
+(`sudo rm /etc/machine-id && sudo systemd-machine-id-setup`), or set
+`[device] node_id`.
 
 ## Home Manager
 
@@ -282,3 +327,11 @@ services.deskhand = {
 
 `settings` takes any key on this page. Never put the password in `settings`: it
 would end up in the world-readable Nix store (the module refuses it).
+
+On a server or VM, add `headless = true;` (sets `general.headless`, runs the
+service at boot instead of with the desktop, and turns the tray off) and let
+the user linger in the NixOS configuration:
+
+```nix
+users.users.alice.linger = true;   # NixOS, not Home Manager
+```

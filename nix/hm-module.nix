@@ -1,5 +1,6 @@
 # Home Manager module: runs Deskhand as a systemd user service in the
-# graphical session.
+# graphical session, or with `headless = true` at boot without a login
+# (needs NixOS `users.users.<name>.linger = true`).
 #
 #   imports = [ inputs.deskhand.homeManagerModules.default ];
 #   services.deskhand = {
@@ -25,8 +26,13 @@ self:
 let
   cfg = config.services.deskhand;
   toml = pkgs.formats.toml { };
-  # `settings.general.tray`, if set, wins over `tray`.
-  settings = lib.recursiveUpdate (lib.recursiveUpdate { general.tray = cfg.tray; } cfg.settings) (
+  packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+  # `settings.general.*`, if set, wins over `tray` and `headless`.
+  general = {
+    inherit (cfg) tray;
+  }
+  // lib.optionalAttrs cfg.headless { headless = true; };
+  settings = lib.recursiveUpdate (lib.recursiveUpdate { inherit general; } cfg.settings) (
     lib.optionalAttrs (cfg.passwordFile != null) {
       mqtt.password_file = cfg.passwordFile;
     }
@@ -39,9 +45,25 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      defaultText = lib.literalExpression "inputs.deskhand.packages.\${system}.default";
+      default = if cfg.headless then packages.deskhand-headless else packages.default;
+      defaultText = lib.literalExpression ''
+        if headless then inputs.deskhand.packages.''${system}.deskhand-headless
+        else inputs.deskhand.packages.''${system}.default
+      '';
       description = "The Deskhand package.";
+    };
+
+    headless = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        A machine without a desktop session (a server or VM). The service is
+        wanted by `default.target` instead of the graphical session, session
+        and desktop integrations default to off (`general.headless`), there
+        is no tray, and the default package is the slim `deskhand-headless`
+        build. To start at boot without a login, the user must linger: set
+        `users.users.<name>.linger = true` in the NixOS configuration.
+      '';
     };
 
     settings = lib.mkOption {
@@ -66,7 +88,8 @@ in
 
     tray = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = !cfg.headless;
+      defaultText = lib.literalExpression "!headless";
       description = ''
         Show a tray icon (status, Pause, Quit) when the desktop has a
         StatusNotifierItem tray. Sets `general.tray`.
@@ -104,9 +127,11 @@ in
       Unit = {
         Description = "Deskhand: this desktop in Home Assistant";
         Documentation = [ "https://github.com/ryanmwright/deskhand" ];
-        # Idle, lock, KDE and notification integrations need the session's
-        # Wayland and D-Bus environment, which the desktop imports into the
-        # user manager when the graphical session starts.
+      }
+      # Idle, lock, KDE and notification integrations need the session's
+      # Wayland and D-Bus environment, which the desktop imports into the
+      # user manager when the graphical session starts.
+      // lib.optionalAttrs (!cfg.headless) {
         PartOf = [ "graphical-session.target" ];
         After = [ "graphical-session.target" ];
       };
@@ -116,7 +141,7 @@ in
         Restart = "on-failure";
         RestartSec = 5;
       };
-      Install.WantedBy = [ "graphical-session.target" ];
+      Install.WantedBy = [ (if cfg.headless then "default.target" else "graphical-session.target") ];
     };
   };
 }

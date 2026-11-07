@@ -31,6 +31,15 @@ section of the tagged version as the release notes.
 
 ### Added
 
+- **Headless mode** for servers and VMs. `[general] headless = true` turns the
+  session and desktop capabilities off by default (`enabled = true` brings one
+  back) and the tray icon off. `deskhand setup --headless` installs a unit
+  wanted by `default.target` and offers to enable lingering, so Deskhand
+  starts at boot without a login; the Home Manager module has
+  `services.deskhand.headless`. The flake has a slim `deskhand-headless`
+  package (no KDE, tray or libpulse), and packages ship
+  `deskhand-headless.service`. `deskhand doctor` shows the lingering state.
+
 - **Logitech receivers (HID++).** Keyboards and mice on a Logi Bolt or
   Unifying receiver report battery, charging state, low battery and
   connection, even where the kernel and UPower don't see them (Bolt). Each is

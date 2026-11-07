@@ -113,4 +113,11 @@ fn print_local_hint(config_path: &Path) {
     println!("Local files were not touched. To remove Deskhand completely:");
     println!("  systemctl --user disable --now deskhand.service   (if installed as a service)");
     println!("  rm {}", config_path.display());
+    let user = std::env::var("USER").unwrap_or_default();
+    if crate::doctor::linger_enabled(&user) == Some(true) {
+        println!(
+            "  loginctl disable-linger {user}   (if lingering was only for Deskhand; \
+             on NixOS, unset users.users.{user}.linger)"
+        );
+    }
 }

@@ -85,6 +85,10 @@ vm-reset:
 e2e:
     nix build .#checks.x86_64-linux.kde-e2e --print-build-logs
 
+# Headless VM test: no desktop, lingering user, Deskhand starts at boot (needs KVM)
+headless-e2e:
+    nix build .#checks.x86_64-linux.headless-e2e --print-build-logs
+
 # Every flake check (package, crane fmt/clippy/test/deny, Home Manager module, e2e)
 flake-check:
     nix flake check --print-build-logs

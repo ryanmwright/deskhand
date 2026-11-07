@@ -88,6 +88,14 @@
             inherit (common) craneLib;
           };
           default = self.packages.${pkgs.stdenv.hostPlatform.system}.deskhand;
+          # For servers and VMs (`services.deskhand.headless`): no KDE, tray
+          # or libpulse.
+          deskhand-headless = self.packages.${pkgs.stdenv.hostPlatform.system}.deskhand.override {
+            features = [
+              "linux"
+              "setup"
+            ];
+          };
         }
       );
 
@@ -134,11 +142,15 @@
             cargoDenyChecks = "bans licenses sources";
           };
         }
-        # Plasma VM end-to-end test; needs KVM (nightly CI job).
+        # VM end-to-end tests; need KVM. Plasma runs nightly in CI.
         // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           kde-e2e = import ./nix/kde-e2e.nix {
             inherit pkgs;
             inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) deskhand;
+          };
+          headless-e2e = import ./nix/headless-e2e.nix {
+            inherit pkgs;
+            deskhand = self.packages.${pkgs.stdenv.hostPlatform.system}.deskhand-headless;
           };
         }
       );

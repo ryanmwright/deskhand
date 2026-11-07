@@ -1,0 +1,15 @@
+# systemd user unit for packages, for machines without a desktop session
+# (servers, VMs): wanted by default.target, so with lingering
+# (`loginctl enable-linger`, NixOS `users.users.<name>.linger = true`) it
+# starts at boot. Set `[general] headless = true` in the config.
+[Unit]
+Description=Deskhand: this machine in Home Assistant (headless)
+
+[Service]
+Type=notify
+ExecStart=@bindir@/deskhand run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

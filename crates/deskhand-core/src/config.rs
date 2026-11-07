@@ -165,6 +165,7 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
         let enabled = match options.remove("enabled") {
+            None if self.headless_default_off(capability) => Enabled::Off,
             None => Enabled::Auto,
             Some(v) => Enabled::deserialize(v).map_err(|error| ConfigError::Section {
                 section: section.clone(),
@@ -176,6 +177,29 @@ impl Config {
             enabled,
             options,
         })
+    }
+
+    /// `[general] headless`, read leniently (a bad value is reported by
+    /// [`Config::general`]).
+    pub fn headless(&self) -> bool {
+        self.raw
+            .get("general")
+            .and_then(|g| g.get("headless"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Whether `capability` is off only because of the headless defaults:
+    /// headless is set, the capability is in [`HEADLESS_OFF`] and its table
+    /// has no `enabled` key.
+    pub fn headless_default_off(&self, capability: &str) -> bool {
+        self.headless()
+            && HEADLESS_OFF.contains(&capability)
+            && !self
+                .raw
+                .get("integrations")
+                .and_then(|i| i.get(capability))
+                .is_some_and(|t| t.get("enabled").is_some())
     }
 
     /// Top-level sections that neither the core nor any name in `known` claims.
@@ -269,11 +293,42 @@ impl Default for DeviceConfig {
     }
 }
 
+/// Session and desktop capabilities that default to off with
+/// `[general] headless = true`. On a machine nobody sits at they either
+/// do nothing or follow ssh sessions (logind). `enabled = true` still turns
+/// one on.
+pub const HEADLESS_OFF: &[&str] = &[
+    "lock",
+    "idle",
+    "power",
+    "keep_awake",
+    "session_state",
+    "in_call",
+    "media",
+    "audio",
+    "camera",
+    "notifications",
+    "appearance",
+    // KDE
+    "active_window",
+    "brightness",
+    "virtual_desktop",
+    "dnd",
+    "dpms",
+    "logout",
+    "night_light",
+    "outputs",
+    "shortcuts",
+];
+
 /// `[general]`: daemon-wide settings.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct GeneralConfig {
     pub tray: bool,
+    /// No desktop session: run without a login and default the session and
+    /// desktop capabilities ([`HEADLESS_OFF`]) to off.
+    pub headless: bool,
     /// How long without input before the user counts as idle.
     #[serde(with = "humantime_serde")]
     pub idle_threshold: Duration,
@@ -285,6 +340,7 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             tray: true,
+            headless: false,
             idle_threshold: Duration::from_secs(300),
             log: "info".to_owned(),
         }
@@ -339,6 +395,26 @@ mod tests {
         assert_eq!(c.integration("metrics").unwrap().enabled, Enabled::Auto);
         assert_eq!(c.integration("lock").unwrap().enabled, Enabled::Auto);
         assert_eq!(c.integration("absent").unwrap().enabled, Enabled::Auto);
+
+        let headless = Config::from_toml_str(
+            "[general]\nheadless = true\n[integrations.power]\nenabled = true\n\
+             [integrations.lock]\nenabled = \"auto\"\n[integrations.media]\nx = 1",
+            None,
+        )
+        .unwrap();
+        assert!(headless.general().unwrap().value.headless);
+        assert_eq!(headless.integration("power").unwrap().enabled, Enabled::On);
+        assert_eq!(headless.integration("lock").unwrap().enabled, Enabled::Auto);
+        assert_eq!(headless.integration("media").unwrap().enabled, Enabled::Off);
+        assert_eq!(headless.integration("dpms").unwrap().enabled, Enabled::Off);
+        assert_eq!(
+            headless.integration("metrics").unwrap().enabled,
+            Enabled::Auto
+        );
+        assert!(headless.headless_default_off("media"));
+        assert!(!headless.headless_default_off("power"));
+        assert!(!headless.headless_default_off("lock"));
+        assert!(!sample().headless_default_off("media"));
 
         let bad = Config::from_toml_str("[integrations.x]\nenabled = \"yes\"", None).unwrap();
         let err = bad.integration("x").unwrap_err().to_string();

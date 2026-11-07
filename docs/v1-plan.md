@@ -980,53 +980,92 @@ Context (2026-11-02, with the user): the user runs coding agents in
 `herdr --remote <vm>` from more than one client machine. The herdr server, and so the agents'
 state, lives on each VM. So Deskhand runs **on each VM** (one HA device per VM, the same no
 matter which client is attached); a desktop-side herdr integration only matters for agents
-run locally.
+run locally. The VMs are NixOS with Home Manager (2026-11-07), usually one herdr session each.
+Split into M15a (headless) and M15b (herdr), one session each.
 
-- [ ] **Headless mode.** A user unit wanted by `default.target` (not
-      `graphical-session.target`), plus `loginctl enable-linger` so it runs without a login:
-      `deskhand setup --headless` (asks to enable lingering; polkit may need sudo) and the HM
-      module (`services.deskhand.headless`).
-- [ ] **Headless defaults.** `doctor` on the (non-KDE) dev host, outside a graphical session,
-      showed that probing alone is not enough: besides metrics, `lock` and `idle` (logind, would
-      follow ssh sessions), `power`, `keep_awake`, `session_state`, `in_call`, `media` (MPRIS only
-      needs a session bus, which lingering provides), `camera` (only needs `/proc` and `/dev`),
-      and, where a notification daemon or sound server runs, `notifications` and `audio` all
-      start. With `[general] headless = true` (set by `setup --headless` and the HM option), these
-      session/desktop capabilities and the KDE ones default to off instead of `auto`;
-      `enabled = true` still turns one on (e.g. `power` for VM reboot buttons). Expected result
-      on a VM: deskhand info, metrics, herdr, and configured systemd units, scripts and sensors.
-      Consider a build with `--no-default-features --features linux,herdr` (no libpulse, no
-      tray) for VMs.
-- [ ] **`herdr` integration** (platform-neutral, `deskhand-common` or its own crate, feature
-      `herdr`). herdr's socket API (docs: herdr.dev/docs/socket-api/):
-      - Socket `~/.config/herdr/herdr.sock` (or `sessions/<name>/herdr.sock`; resolution
-        `--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default). Newline-delimited JSON:
-        `{"id":"req_1","method":"ping","params":{}}` → `{"id":"req_1","result":{...}}` or
-        `{"id":...,"error":{"code":...,"message":...}}`.
-      - Push: `events.subscribe` with `subscriptions: [{"type": "pane.agent_status_changed", ...}]`
-        streams events after an ack. No replay; a slow subscriber gets `events_lost` and is
-        disconnected. Events are invalidation signals: re-read with `session.snapshot` (or
-        `agent.list` / `pane.list`). Other events: `pane.agent_detected`, `pane.created`,
-        `pane.closed`, `pane.exited`, `pane.updated`, `pane.output_matched`.
-      - Agent status per pane: `idle`, `working`, `blocked` (needs the user), `done` (idle and
-        not yet seen), `unknown`.
-      - CLI: `herdr status`, `herdr api snapshot`, `herdr api schema --json` (read this first:
-        exact event payloads, what a subscription without `pane_id` means, workspace/agent
-        names).
-      - Entities (draft): `herdr_working`, `herdr_blocked` count sensors (attribute: the agents,
-        with workspace and pane); a `herdr_agent` event entity firing `started`, `blocked`, `done`
-        (and maybe `exited`) with pane, agent and workspace attributes, for notification
-        automations; maybe a status sensor per pane as dynamic entities (like Bluetooth devices).
-        Probe: the socket answers `ping`. Reconnect when the herdr server restarts.
-      - Same pattern as MPRIS and BlueZ: subscribe, re-read the snapshot on any event, diff, fire
-        events for transitions.
-- [ ] Docs (entities, configuration, home-assistant: "notify my phone when an agent is
-      blocked"), a blueprint if it is worth it.
-- **Accept:** on a headless machine, Deskhand starts without a login, the device shows herdr
-  agents, and an HA automation notifies when an agent becomes `blocked` and when it is `done`.
-- herdr 0.9.1 is installed on the dev host (`devenv`), with a live server socket, so the
-  integration can be tested against the real thing. Don't disturb the user's running sessions:
-  use a separate `--session` for tests.
+#### M15a: Headless mode
+- [x] `[general] headless`: `HEADLESS_OFF` in `config.rs` (lock, idle, power, keep_awake,
+      session_state, in_call, media, audio, camera, notifications, appearance, all KDE) default
+      to off instead of `auto` in `Config::integration`; `enabled = true` still wins. No tray.
+      `run.rs` now marks every candidate capability that resolves to off as disabled for
+      discovery, not only the configured ones, so a desktop run's entities are removed.
+- [x] `deskhand setup --headless` (asked when not given, default from `WAYLAND_DISPLAY`/
+      `DISPLAY`): writes `[general] headless = true` (and `enabled = true` on power when buttons
+      are chosen), a unit wanted by `default.target` without PartOf/After, installs it with
+      `reenable` (switching modes moves the symlink) and offers `loginctl enable-linger`
+      (NixOS: prints `users.users.<name>.linger = true`).
+- [x] `doctor`: headless and lingering state, a hint without a graphical session, capabilities
+      shown as `disabled (headless)`; `uninstall` mentions `disable-linger`.
+- [x] HM `services.deskhand.headless` (unit on `default.target`, `tray` defaults to off, package
+      defaults to `deskhand-headless`); the flake's `deskhand-headless` package (`linux`, `setup`;
+      no KDE, tray or libpulse); packages ship `deskhand-headless.service`.
+- [x] `checks.headless-e2e` (`just headless-e2e`, ~1 min): lingering user without a login, the slim
+      package comes online at boot, discovery has info and metrics but no session entities,
+      doctor shows `Headless (lingering on…)`. Note: systemd lists a `manager`-class session per
+      lingering user, so "no login" means no session of another class.
+- [x] Docs: configuration.md "Headless machines" (including cloned VMs sharing
+      `/etc/machine-id`: new machine id or `[device] node_id`), README, CHANGELOG.
+- **Accept:** on a headless machine, Deskhand starts without a login and publishes info, metrics
+  and configured units/scripts/sensors only. VM test done; the user's VMs pending.
+
+#### M15b: herdr integration
+**herdr 0.9.1 (protocol 22), checked against a scratch `--session` on 2026-11-07:**
+- Newline-delimited JSON on a Unix socket: `$XDG_CONFIG_HOME/herdr/herdr.sock`,
+  `.../sessions/<name>/herdr.sock`, or `HERDR_SOCKET_PATH`. `herdr api schema --json` has the
+  full schema.
+- **One request per connection:** the server closes a plain request's connection after the
+  response. A subscription connection takes exactly one `events.subscribe`; a second resets it.
+- **`pane.agent_status_changed` needs a `pane_id`:** a subscription without one is rejected
+  (`missing field pane_id`), and no global event fires on status changes. Global subscriptions
+  only cover structure: `pane_created/closed/exited`, `pane_agent_detected` (on detection and on
+  release, with `released: true`, `final_status`), workspace and tab events. Subscribing to an
+  unknown pane fails with `pane_not_found`; a pane subscription survives its pane closing and
+  receives `pane_closed`.
+- Status payload: `{"event":"pane.agent_status_changed","data":{"agent","agent_status",
+  "pane_id","workspace_id"}}`. Statuses: `idle`, `working`, `blocked`, `done`, `unknown`.
+- **`done` is unusable headless:** it means "idle and not yet seen by a client"; with no client
+  attached working→idle stays `idle`. Deskhand derives done itself.
+- Pane ids (`w6:p1`) live only as long as the herdr server; workspace labels are not unique.
+- Status events come per agent turn, not per output: two minutes on the user's live session
+  gave none. Agent status can be driven for tests with `pane.report_agent` (`source`, `agent`,
+  `state`, increasing `seq`) and `pane.release_agent`.
+- The herdr server often starts after Deskhand (first `herdr --remote` attach), and the
+  supervisor re-probes only every 300s, so the integration handles "not running" itself.
+
+**Design:**
+- [ ] `deskhand-common/src/herdr/` (`#[cfg(unix)]`, feature `herdr`, forwarded by the binary, in
+      `default` and `deskhand-headless`): `protocol.rs` (serde subset: ping, `session.snapshot`,
+      `events.subscribe`, event envelope), `client.rs` (one request per connection; subscribe
+      returns the line stream after the ack), `mod.rs` (integration).
+- [ ] Options `[integrations.herdr]`: `session`, `socket`; else `HERDR_SOCKET_PATH`,
+      `HERDR_SESSION`, the default socket. One session.
+- [ ] Probe: available when the socket or the herdr config dir exists; the server need not run.
+- [ ] Run loop (never `Err` for a missing herdr): disconnected → `herdr_running` off, counts 0,
+      retry 1s→10s. Connected → a **watch** subscription (pane created/closed/exited,
+      agent_detected, workspace renamed/closed), a snapshot seeding state **without events**, a
+      **status** subscription with one `pane.agent_status_changed` per agent pane (re-snapshot
+      on `pane_not_found`). Status events apply in order; watch events and a 60s timer trigger a
+      debounced (100ms/500ms) re-snapshot; when the agent pane set changes, open the new status
+      subscription before dropping the old. Watch EOF → disconnected (no `exited` events).
+- [ ] Transitions (herdr `done` = idle; `unknown` fires nothing): → working `working`,
+      → blocked `blocked`, working/blocked → idle `done`, released/closed `exited`.
+- [ ] Entities (no per-pane entities, so no churn when herdr restarts): `herdr_running`
+      (binary_sensor, attrs version, session), `herdr_agents` (count, attr `agents`
+      `[{agent, workspace, status, cwd, pane}]`), `herdr_working`, `herdr_blocked` (counts, attr
+      `agents` `["claude @ deskhand"]`), `herdr_agent` event (`working`/`blocked`/`done`/`exited`,
+      attrs agent, workspace, pane, cwd, previous). Traffic: one event and one or two state
+      updates per transition.
+- [ ] Tests against a fake herdr server (Unix listener on a tempfile, real herdr semantics: one
+      request per connection, one subscribe, `pane_id` required, `pane_not_found`, pushes,
+      stop/restart): seed fires nothing; working→blocked→working→idle; herdr `done`; new agent
+      rebuilds the subscription; pane close; server stop/restart; the `pane_not_found` race.
+- [ ] Docs (entities, configuration, home-assistant "notify my phone when an agent is blocked or
+      done"), a blueprint, CHANGELOG.
+- **Accept:** on the dev host with `herdr --session <scratch> server` and a fake agent
+  (`pane.report_agent`), the dev HA shows the counts, and an automation on `herdr_agent` fires
+  for `blocked` and `done`; `herdr server stop` turns `herdr_running` off and a restart
+  reconnects. Don't disturb the user's running sessions. On the user's VMs: the device shows
+  herdr agents.
 
 ### M16–M19 (post-V1): Logitech HID++ peripheral batteries
 Context (2026-11-04, with the user): an MX Keys S on a Logi Bolt receiver does not show up in
@@ -1440,6 +1479,7 @@ the MX Keys S has all of the keyboard ones (M16 feature table).
 | 2026-11-04 | M17 | Sub-devices: `SubDevice` on `EntitySpec`, one retained MQTT document per device under `homeassistant/device/deskhand_<node>/<key>/config` (adopted, kept, stubbed and deleted like the main one; uninstall and print-discovery cover them). `peripherals.rs` in common: sources, sink, merge by key or serial, five entities per peripheral on its own device, receivers as devices, per-source supervision and config. UPower peripherals are now a source (same `battery_<model>` ids) with state, low, connected and updated. Dev HA keeps entity ids and history when an entity moves to a sub-device. New snapshot, 4 planner tests, broker test, 6 merge tests, UPower mock test |
 | 2026-11-05 | M19 (part) | Opt-in keyboard backlight (`controls = ["backlight"]`): switch, level, mode select (added: a level forces manual mode) and three timeouts on the keyboard's device. Generic `Backlight`/`Controller` model in common; 0x1982 in the HID++ adapter (looked up only when enabled, events for key presses, read-modify-write as Solaar does); commands only reach a connected keyboard. Mock backlight with the M16 values, 4 source tests (opt-in, capture replay, writes, asleep), adapter and kit tests. Docs: entities, configuration, two HA automations, "Future HID++ controls" in §8, README, CHANGELOG. `deny.toml`: RUSTSEC-2026-0440 (dev-only). Host check open |
 | 2026-11-06 | Fix | Peripheral keys from the hardware id: Spook reported orphaned long-term statistics on the KDE host because the kernel names a Logitech device that was asleep at setup `Logitech Wireless Keyboard PID:4075` and renames it once awake, so the model-name key (and with it the entities) changed. `key_for(serial, model, fallback)` now prefers the serial and skips such placeholder names (`is_placeholder_name`); UPower drops them as the model; HID++ keys by the unit ID (receiver 0xB5, else 0x0003) and reports names only once read when it has none; the kit takes the name from a source that knows the model. One-time id change, in CHANGELOG. UPower mock test (placeholder then real name, same ids), kit and key tests, HID++ tests on unit-id keys |
+| 2026-11-07 | M15a | Planned M15 against herdr 0.9.1 (findings in M15b: per-pane status subscriptions, one request per connection, `done` needs a client) and split it. Headless mode: `[general] headless` with `HEADLESS_OFF` defaults, discovery cleanup over all candidate capabilities, `setup --headless` (default.target unit, `reenable`, lingering offer), doctor/uninstall hints, HM `headless` option, `deskhand-headless` package and unit, `checks.headless-e2e` (online at boot without a login, no session entities). |
 
 ## Verification (whole V1)
 1. `nix develop -c just ci` runs fmt, clippy, unit tests, snapshots and mosquitto integration tests.
